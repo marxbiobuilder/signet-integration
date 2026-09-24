@@ -68,6 +68,13 @@ export function createScopeVocabulary<A extends string>(
       'scope vocabulary: tokenScopeFor must map actions to distinct scopes',
     );
   }
+  for (const scope of actionByScope.keys()) {
+    if (scope === '' || /[\s"\\]/.test(scope)) {
+      throw new Error(
+        `scope vocabulary: ${JSON.stringify(scope)} is not a scope token (no space, quote or backslash)`,
+      );
+    }
+  }
   if (actionByScope.has(input.admissionScope)) {
     throw new Error(
       `scope vocabulary: an action is spelled as the admission scope ${input.admissionScope}`,

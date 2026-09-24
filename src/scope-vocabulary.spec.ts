@@ -86,6 +86,17 @@ describe('createScopeVocabulary', () => {
     ).toThrow(/admission scope/);
   });
 
+  it('refuses an encoder that produces a non-token scope', () => {
+    expect(() =>
+      createScopeVocabulary<Action>({
+        actions: ACTIONS,
+        admissionScope: 'acme:access',
+        defaultActions: new Set<Action>(),
+        tokenScopeFor: (action) => `acme ${action}`,
+      }),
+    ).toThrow(/not a scope token/);
+  });
+
   it('refuses a default action outside the vocabulary', () => {
     expect(() =>
       createScopeVocabulary<Action>({

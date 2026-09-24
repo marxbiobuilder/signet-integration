@@ -71,6 +71,17 @@ const Principal = createSignetPrincipalDecorator<Principal>(
   isPrincipal,
 );
 
+// Class-level @Public(): the guard must consult the class as well as the
+// handler.
+@Controller('open')
+@Public()
+class OpenController {
+  @Get()
+  ok(): { open: true } {
+    return { open: true };
+  }
+}
+
 @Controller()
 class ProbeController {
   @Get('mcp')
@@ -138,6 +149,7 @@ describe('SignetIntegrationModule.forRoot, end to end', () => {
     issuer = await startTestIssuer();
     const moduleRef = await Test.createTestingModule({
       controllers: [
+        OpenController,
         ProbeController,
         createProtectedResourceController(FIXTURE_OPTIONS),
       ],
@@ -185,10 +197,13 @@ describe('SignetIntegrationModule.forRoot, end to end', () => {
       subject,
     });
 
-  it('lets a @Public() route through the APP_GUARD', async () => {
+  it('lets a @Public() route through the APP_GUARD, marked on the handler or on the class', async () => {
     const response = await fetch(`${baseUrl}/health`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+    const open = await fetch(`${baseUrl}/open`);
+    expect(open.status).toBe(200);
+    expect(await open.json()).toEqual({ open: true });
   });
 
   it('answers a credential-less resource request 401 with the metadata challenge', async () => {

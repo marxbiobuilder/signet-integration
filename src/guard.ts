@@ -81,6 +81,7 @@ interface SignetRequest extends Request {
 //   resolver throws PrincipalStoreUnavailableError → 503, fail closed
 //   resolver throws an HttpException        → its own status
 //   resolver throws anything else           → 500, the error under its own name
+//   resolver logFields reuses a fixed key   → 500, resolver_contract_error
 //   Passport passed but attached no user    → 500, programming error
 //
 // None of these are 401: the token was valid. The 403 messages distinguish
@@ -199,8 +200,10 @@ export class SignetBearerGuard extends AuthGuard(SIGNET_JWT_STRATEGY) {
           'this identity holds no authorization in this service',
       );
     }
-    this.logDecision('authorized', identity.clientId, environment, resolution);
+    // Attached before the decision line: an assignment that throws must not
+    // leave an "authorized" line behind.
     request[this.signetOptions.requestPrincipalKey] = resolution.principal;
+    this.logDecision('authorized', identity.clientId, environment, resolution);
     return true;
   }
 
@@ -225,8 +228,13 @@ export class SignetBearerGuard extends AuthGuard(SIGNET_JWT_STRATEGY) {
     const consumerFields = Object.entries(resolution.logFields ?? {});
     for (const [key] of consumerFields) {
       if (RESERVED_LOG_KEYS.has(key)) {
-        // A programming error in the resolver, not a decision: surfaces as
-        // a 500 under its own name rather than a forged log line.
+        // A programming error in the resolver, not a decision: one alertable
+        // line, then a 500 under its own name rather than a forged log line.
+        this.logFailure(
+          'resolver logFields invalid',
+          'resolver_contract_error',
+          'Error',
+        );
         throw new Error(
           `resolver logFields must not use the reserved key ${key}`,
         );
@@ -261,7 +269,10 @@ export class SignetBearerGuard extends AuthGuard(SIGNET_JWT_STRATEGY) {
   private logFailure(
     message: string,
     metric:
-      'auth_store_error' | 'auth_store_unavailable' | 'signet_identity_missing',
+      | 'auth_store_error'
+      | 'auth_store_unavailable'
+      | 'resolver_contract_error'
+      | 'signet_identity_missing',
     errorName: string,
     stack?: string,
   ): void {

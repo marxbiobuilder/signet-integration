@@ -10,9 +10,12 @@ import {
  */
 const RESERVED_REQUEST_KEYS: ReadonlySet<string> = new Set([
   'app',
+  'baseUrl',
   'body',
   'cookies',
+  'fresh',
   'headers',
+  'host',
   'hostname',
   'ip',
   'ips',
@@ -25,9 +28,21 @@ const RESERVED_REQUEST_KEYS: ReadonlySet<string> = new Set([
   'rawHeaders',
   'res',
   'route',
+  'secure',
+  'session',
   'signedCookies',
+  'socket',
+  'stale',
+  'subdomains',
   'url',
+  'xhr',
 ]);
+
+/**
+ * A scope token as RFC 6749 §3.3 spells it: no space (the list separator)
+ * and nothing that breaks out of the quoted `scope="…"` parameter.
+ */
+const SCOPE_BREAKERS = /[\s"\\]/;
 
 /**
  * Characters that would break out of the quoted value in a
@@ -63,6 +78,16 @@ export function validateSignetIntegrationOptions<E extends string>(
       `scopesSupported must include the admission scope ${options.admissionScope}`,
     );
   }
+  for (const scope of options.scopesSupported) {
+    if (scope === '' || SCOPE_BREAKERS.test(scope)) {
+      fail(
+        `scopesSupported entry ${JSON.stringify(scope)} is not a scope token (no space, quote or backslash)`,
+      );
+    }
+  }
+  if (options.requestPrincipalKey === '') {
+    fail('requestPrincipalKey must be non-empty');
+  }
   if (RESERVED_REQUEST_KEYS.has(options.requestPrincipalKey)) {
     fail(
       `requestPrincipalKey ${options.requestPrincipalKey} is a request property Express or Nest already uses`,
@@ -93,7 +118,12 @@ export function validateSignetIntegrationOptions<E extends string>(
   // same path with no query or fragment: the metadata route is mounted once,
   // on that path, and the challenge points at it.
   const resourcePath = (resource: string, label: string): string => {
-    const url = new URL(resource);
+    let url: URL;
+    try {
+      url = new URL(resource);
+    } catch {
+      return fail(`${label} is not a URL: ${resource}`);
+    }
     if (url.search !== '' || url.hash !== '') {
       fail(`${label} must not carry a query or fragment: ${resource}`);
     }

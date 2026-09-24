@@ -1,6 +1,6 @@
 {
   "name": "@marxbiotech/signet-integration",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Signet (OAuth 2.1 / OIDC) resource-server integration for NestJS: Bearer verification, RFC 6750 challenges, RFC 9728 metadata, deployment profile.",
   "license": "MIT",
   "repository": {

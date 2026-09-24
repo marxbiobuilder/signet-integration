@@ -254,13 +254,47 @@ describe('SignetBearerGuard', () => {
     'refuses a resolver logFields key that shadows the fixed field %s',
     async (key) => {
       const error = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
       const guard = makeGuard(authorized({ [key]: 'spoof' }));
       await expect(
         guard.canActivate(makeContext(IDENTITY).context),
       ).rejects.toThrow(/reserved key/);
-      expect(error).not.toHaveBeenCalled();
+      // No forged decision line, and one alertable failure line.
+      expect(log).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(String(error.mock.calls[0][0])).toContain(
+        'metric=resolver_contract_error',
+      );
     },
   );
+
+  // A consumer subclasses the guard to keep its own name on the log lines
+  // (operators filter on `context`); the logger must take the SUBCLASS name.
+  it('logs under the subclass’s name when subclassed', async () => {
+    const contexts: unknown[] = [];
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(function (
+      this: Logger,
+    ) {
+      contexts.push((this as unknown as { context?: string }).context);
+    });
+    class ConsumerNamedGuard extends SignetBearerGuard {}
+    const guard = new ConsumerNamedGuard(
+      { resolve: authorized() },
+      { profile: FIXTURE_DEVELOPMENT_PROFILE },
+      FIXTURE_OPTIONS,
+      reflectorOf(false),
+    );
+    const base = Object.getPrototypeOf(
+      Object.getPrototypeOf(Object.getPrototypeOf(guard)),
+    ) as InstanceType<ReturnType<typeof AuthGuard>>;
+    jest.spyOn(base, 'canActivate').mockResolvedValue(true);
+    await expect(
+      guard.canActivate(makeContext(IDENTITY).context),
+    ).resolves.toBe(true);
+    expect(contexts).toEqual(['ConsumerNamedGuard']);
+  });
 
   it('turns the strategy’s refusal into ONE indistinguishable 401', async () => {
     const resolve = authorized();

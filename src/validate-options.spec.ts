@@ -67,6 +67,48 @@ describe('validateSignetIntegrationOptions', () => {
       { canonicalResourceFor: (host) => `https://${host}/mcp?x=1` },
       /query or fragment/,
     ],
+    [
+      'a canonical resource with a fragment',
+      { canonicalResourceFor: (host) => `https://${host}/mcp#top` },
+      /query or fragment/,
+    ],
+    [
+      'a development profile whose resource carries a query string',
+      {
+        developmentProfile: {
+          canonicalResource: 'http://localhost:3000/mcp?x=1',
+          host: 'localhost:3000',
+          namespace: 'development',
+        },
+      },
+      /developmentProfile.canonicalResource must not carry a query or fragment/,
+    ],
+    [
+      'a canonical resource that is not a URL, naming the field',
+      { canonicalResourceFor: (host) => `${host}/mcp` },
+      /canonicalResourceFor\(.*\) is not a URL/,
+    ],
+    ['an empty realm', { realm: '' }, /realm/],
+    [
+      'a scope with a space (RFC 6749 §3.3 separator)',
+      { scopesSupported: [FIXTURE_OPTIONS.admissionScope, 'widgets read'] },
+      /scopesSupported entry .* is not a scope token/,
+    ],
+    [
+      'an empty request key',
+      { requestPrincipalKey: '' },
+      /requestPrincipalKey/,
+    ],
+    [
+      'a request key Express defines as a getter',
+      { requestPrincipalKey: 'secure' },
+      /requestPrincipalKey secure/,
+    ],
+    [
+      'no deployed profiles at all',
+      { deployedProfiles: {} as Options['deployedProfiles'] },
+      /deployedProfiles/,
+    ],
   ])('refuses %s', (_label, override, message) => {
     expect(() =>
       validateSignetIntegrationOptions({ ...FIXTURE_OPTIONS, ...override }),

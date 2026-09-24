@@ -3,8 +3,9 @@ import { type SignetIntegrationOptions } from '../options';
 // A complete options object for a fictional second service, for tests of
 // the mechanism and for consumers' tests that need "some other service".
 // Its canonical resource keeps a PATH (`/mcp`) so every derived path and URL
-// differs from a bare-origin consumer's; a test that needs the bare-origin
-// shape spreads over it with `canonicalResourceFor: (h) => \`https://${h}\``.
+// differs from a bare-origin consumer's. A test that needs the bare-origin
+// shape overrides `canonicalResourceFor` AND `developmentProfile.canonicalResource`
+// together; the options validation refuses profiles whose paths differ.
 export const FIXTURE_OPTIONS: SignetIntegrationOptions<
   'production' | 'staging'
 > = {

@@ -100,8 +100,8 @@ export function resolveDeploymentProfile<E extends string>(
 // obtain a profile it should not have: it throws here instead.
 //
 // A consumer that wants `profile.environment` typed as its own union
-// subclasses this and re-declares `profile` with the narrower type; the DI
-// token cannot carry the type parameter.
+// subclasses this, re-declares `profile` with the narrower type and checks
+// it in its constructor; the DI token cannot carry the type parameter.
 @Injectable()
 export class SignetDeploymentProfileService {
   readonly profile: Readonly<DeploymentProfile>;
