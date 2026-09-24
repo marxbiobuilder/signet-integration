@@ -7,6 +7,8 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-24
+
 ### Changed
 
 - 原始碼從 `marxbiotech/ordersync-marxbio-tech` 的 `packages/signet-integration`
@@ -34,6 +36,7 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/marxbiobuilder/signet-integration/releases/tag/v0.1.1
 [0.1.0]: https://github.com/marxbiobuilder/signet-integration/releases/tag/v0.1.0
