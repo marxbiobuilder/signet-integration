@@ -5,13 +5,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marxbiotech/ordersync-marxbio-tech.git",
-    "directory": "packages/signet-integration"
+    "url": "git+https://github.com/marxbiobuilder/signet-integration.git"
   },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
   },
+  "packageManager": "pnpm@9.1.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

@@ -109,3 +109,21 @@ issues), `startJwksServer()`, `FIXTURE_OPTIONS` and `FIXTURE_DEVELOPMENT_PROFILE
 - `iat` is not required and no `maxTokenAge` is applied; `client_id` is required (RFC 9068 §2.2, Signet issues it always).
 - JWKS options are fixed: 3 s timeout, 30 s cooldown, 10 min cache.
 - The guard's decision log line is `metric reason <your logFields> clientId environment`; the fixed keys are reserved.
+
+## Development and release
+
+```sh
+pnpm install
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
+```
+
+Releases are cut by tag. Write the `CHANGELOG.md` entry, bump `version` in
+`package.json` on `main`, then push the matching tag:
+
+```sh
+git tag v0.1.2 && git push origin v0.1.2
+```
+
+`.github/workflows/publish.yml` refuses a tag that does not equal
+`v<package.json version>`, runs lint, tests and build, and publishes with npm
+trusted publishing (OIDC). Nothing is published from a developer machine.
