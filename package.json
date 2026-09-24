@@ -1,9 +1,17 @@
 {
   "name": "@marxbiotech/signet-integration",
   "version": "0.1.0",
-  "private": true,
   "description": "Signet (OAuth 2.1 / OIDC) resource-server integration for NestJS: Bearer verification, RFC 6750 challenges, RFC 9728 metadata, deployment profile.",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marxbiotech/ordersync-marxbio-tech.git",
+    "directory": "packages/signet-integration"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -28,6 +36,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "lint": "eslint \"src/**/*.ts\" --max-warnings=0",
     "test": "TZ=UTC jest",
