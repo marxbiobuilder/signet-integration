@@ -10,6 +10,12 @@ stored, is yours.
 
 ## Wiring
 
+Two ways in. Both verify the same way, classify the resolver's outcome the same
+way (401 / 403 / 503 / 500) and write the same decision log line; pick by where
+you want the principal to land.
+
+### A. Your own Passport strategy (`request.user` is your principal)
+
 ```ts
 // your-signet.options.ts -- your values, one object
 export const MY_OPTIONS = {
@@ -21,26 +27,25 @@ export const MY_OPTIONS = {
   },
   developmentProfile: { canonicalResource: 'http://localhost/api/mcp', host: 'localhost', namespace: 'development' },
   env: {
-    deploymentNamespace: 'MY_DEPLOYMENT_NAMESPACE',
-    jwtAudience: 'MY_JWT_AUDIENCE',
-    jwtIssuer: 'MY_JWT_ISSUER',
-    jwtJwksUri: 'MY_JWT_JWKS_URI',
-    jwtClockToleranceS: 'MY_JWT_CLOCK_TOLERANCE_S',
+    deploymentNamespace: 'SIGNET_DEPLOYMENT_NAMESPACE',
+    jwtAudience: 'SIGNET_JWT_AUDIENCE',
+    jwtIssuer: 'SIGNET_JWT_ISSUER',
+    jwtJwksUri: 'SIGNET_JWT_JWKS_URI',
+    jwtClockToleranceS: 'SIGNET_JWT_CLOCK_TOLERANCE_S',
     signetEnabled: 'SIGNET_AUTH_ENABLED',       // omit = the Bearer channel is always on
     legacyApiKeyEnabled: 'LEGACY_API_KEY_ENABLED', // omit = no legacy channel
   },
   realm: 'myservice',
-  requestPrincipalKey: 'user',            // where the guard attaches your principal
+  requestPrincipalKey: 'user',            // route B attaches here; route A leaves it to Passport
   scopesSupported: ['myservice:access'],  // RFC 9728 scopes_supported; must include the admission scope
 } as const satisfies SignetIntegrationOptions<'production' | 'staging'>;
 
-// your resolver -- Passport's verify callback, as a Nest provider.
-// Annotate the return type: a class method gets no contextual typing from
-// `implements`, so without it `ok: true` widens to `boolean` and fails to compile.
+// your strategy: Passport's verify callback, with the identity already proven.
+// The package's dependencies are property-injected; the constructor is yours.
 @Injectable()
-export class MyResolver implements SignetPrincipalResolver<MyPrincipal> {
-  constructor(private readonly users: UsersRepository) {}
-  async resolve(identity: VerifiedSignetIdentity): Promise<PrincipalResolution<MyPrincipal>> {
+export class MySignetStrategy extends SignetPrincipalStrategy<MyUser> {
+  constructor(private readonly users: UsersRepository) { super(); }
+  async resolve(identity: VerifiedSignetIdentity): Promise<PrincipalResolution<MyUser>> {
     const user = await this.users.findBySignetSubject(identity.subject); // or identity.claims.erp_user_id
     if (!user) return { ok: false, reason: 'unknown_subject' };          // → 403, reason only logged
     return { ok: true, principal: user, logFields: { userId: user.id } }; // logFields render on the decision line
@@ -48,7 +53,33 @@ export class MyResolver implements SignetPrincipalResolver<MyPrincipal> {
   }
 }
 
-// your auth module
+@Module({
+  imports: [UsersModule, SignetIntegrationModule.forPassport({ options: MY_OPTIONS })],
+  providers: [
+    MySignetStrategy,                                          // registers itself with Passport
+    { provide: APP_GUARD, useClass: SignetPassportGuard },     // AuthGuard('signet-jwt') that honours @Public()
+    { provide: APP_FILTER, useClass: BearerChallengeFilter },  // RFC 6750 challenges on 401/403
+  ],
+  controllers: [createProtectedResourceController(MY_OPTIONS), ...yourControllers],
+})
+export class ApiModule {}
+```
+
+`SignetPassportGuard` is `AuthGuard('signet-jwt')` plus `@Public()` and a
+uniform 401; any `AuthGuard('signet-jwt')` of your own works too. Handlers read
+the principal from `request.user` as they always did.
+
+### B. Module-wired resolver (principal under `requestPrincipalKey`)
+
+The same options and the same `resolve`, as a provider the module binds:
+
+```ts
+@Injectable()
+export class MyResolver implements SignetPrincipalResolver<MyUser> {
+  constructor(private readonly users: UsersRepository) {}
+  async resolve(identity: VerifiedSignetIdentity): Promise<PrincipalResolution<MyUser>> { /* as above */ }
+}
+
 @Module({
   imports: [
     UsersModule,
@@ -58,7 +89,7 @@ export class MyResolver implements SignetPrincipalResolver<MyPrincipal> {
       imports: [UsersModule],        // whatever the resolver's constructor needs
     }),
   ],
-  exports: [SignetIntegrationModule], // so the process module below can inject the package's providers
+  exports: [SignetIntegrationModule],
 })
 export class AuthModule {}
 
@@ -73,6 +104,19 @@ export class AuthModule {}
 })
 export class ApiModule {}
 ```
+
+Here Passport's `request.user` stays the verified identity and the principal
+goes under `options.requestPrincipalKey` (`principal`, say), which is what a
+consumer with several credential channels and its own dispatcher wants.
+
+### Entry points
+
+- `@marxbiotech/signet-integration` -- everything.
+- `@marxbiotech/signet-integration/passport` -- everything except
+  `createProtectedResourceController`, whose file needs `@nestjs/swagger` and
+  `@nestjs/throttler` (both optional peers). Import from here if you serve the
+  metadata document some other way.
+- `@marxbiotech/signet-integration/testing` -- see below.
 
 Requirements: `ConfigModule` must be global (the strategy, filter and profile
 service inject `ConfigService`); validate the env variables named in `options.env`
@@ -108,7 +152,7 @@ issues), `startJwksServer()`, `FIXTURE_OPTIONS` and `FIXTURE_DEVELOPMENT_PROFILE
 - Verifier failures (bad signature, wrong audience, unreachable JWKS) are one uniform 401; the reason is only logged.
 - `iat` is not required and no `maxTokenAge` is applied; `client_id` is required (RFC 9068 §2.2, Signet issues it always).
 - JWKS options are fixed: 3 s timeout, 30 s cooldown, 10 min cache.
-- The guard's decision log line is `metric reason <your logFields> clientId environment`; the fixed keys are reserved.
+- The decision log line is `metric reason <your logFields> clientId environment`, written under your strategy's or guard's class name; the fixed keys are reserved.
 
 ## Development and release
 
@@ -121,7 +165,7 @@ Releases are cut by tag. Write the `CHANGELOG.md` entry, bump `version` in
 `package.json` on `main`, then push the matching tag:
 
 ```sh
-git tag v0.1.2 && git push origin v0.1.2
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 `.github/workflows/publish.yml` refuses a tag that does not equal

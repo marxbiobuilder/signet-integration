@@ -20,12 +20,14 @@ import { BearerChallengeFilter } from './bearer-challenge.filter';
 import { SignetBearerGuard } from './guard';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { SignetIntegrationModule } from './module';
+import { SignetPassportGuard } from './passport-guard';
 import { createSignetPrincipalDecorator } from './principal.decorator';
 import {
   type PrincipalResolution,
   SIGNET_PRINCIPAL_RESOLVER,
   type SignetPrincipalResolver,
 } from './principal-resolver';
+import { SignetPrincipalStrategy } from './principal-strategy';
 import { createProtectedResourceController } from './protected-resource.controller';
 import { Public } from './public.decorator';
 import { FIXTURE_OPTIONS } from './testing/fixture';
@@ -340,5 +342,187 @@ describe('SignetIntegrationModule.forRoot, resolver provider shapes', () => {
         resolver: FixtureResolver,
       }),
     ).toThrow(/scopesSupported must include the admission scope/);
+  });
+});
+
+// The Passport-native shape, over the same HTTP: forPassport, a consumer
+// strategy that extends SignetPrincipalStrategy with a dependency of its own,
+// SignetPassportGuard as APP_GUARD. Passport leaves the principal on
+// request.user; nothing goes under requestPrincipalKey.
+@Injectable()
+class ConsumerStrategy extends SignetPrincipalStrategy<Principal> {
+  constructor(@Inject(DEP) private readonly source: string) {
+    super();
+  }
+
+  resolve(
+    identity: VerifiedSignetIdentity,
+  ): Promise<PrincipalResolution<Principal>> {
+    if (identity.subject !== 'user-1') {
+      return Promise.resolve({ ok: false, reason: 'unknown_subject' });
+    }
+    return Promise.resolve({
+      logFields: { source: this.source },
+      ok: true,
+      principal: { name: `${this.source}:${identity.subject}` },
+    });
+  }
+}
+
+@Controller()
+class PassportProbeController {
+  @Get('me')
+  me(@Req() request: Request & { principal?: unknown }): {
+    principal: unknown;
+    user: unknown;
+  } {
+    return { principal: request.principal, user: request.user };
+  }
+
+  @Get('health')
+  @Public()
+  health(): { ok: true } {
+    return { ok: true };
+  }
+}
+
+describe('SignetIntegrationModule.forPassport, end to end', () => {
+  let issuer: TestIssuer;
+  let app: INestApplication;
+  let baseUrl: string;
+  const lines: { context?: string; message: string }[] = [];
+  const capture = function (this: Logger, message: unknown): void {
+    lines.push({
+      context: (this as unknown as { context?: string }).context,
+      message: String(message),
+    });
+  };
+
+  // restoreMocks undoes the spies after every test; the request-time lines
+  // need them back.
+  beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(capture);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(capture);
+  });
+
+  beforeAll(async () => {
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(capture);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(capture);
+    issuer = await startTestIssuer();
+    const moduleRef = await Test.createTestingModule({
+      controllers: [PassportProbeController],
+      imports: [
+        PassportModule.register({}),
+        DepModule,
+        FakeConfigModule.forEnv({
+          ACME_JWT_ISSUER: ISSUER,
+          ACME_JWT_JWKS_URI: issuer.keys.url,
+          ACME_SIGNET_ENABLED: 'true',
+          NODE_ENV: 'test',
+        }),
+        SignetIntegrationModule.forPassport({ options: FIXTURE_OPTIONS }),
+      ],
+      providers: [
+        ConsumerStrategy,
+        { provide: APP_GUARD, useClass: SignetPassportGuard },
+        { provide: APP_FILTER, useClass: BearerChallengeFilter },
+      ],
+    }).compile();
+    app = moduleRef.createNestApplication({ logger: false });
+    await app.listen(0, '127.0.0.1');
+    baseUrl = await app.getUrl();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await issuer.close();
+  });
+
+  const token = (
+    subject: string,
+    scopes: readonly string[] = ['acme:access'],
+  ) =>
+    issuer.signSignetToken({
+      audience: 'http://localhost/mcp',
+      clientId: 'acme-cli',
+      issuer: ISSUER,
+      scopes,
+      subject,
+    });
+
+  it('builds the verifier once the strategy is a provider, logging under the consumer’s name', () => {
+    expect(lines).toContainEqual({
+      context: 'ConsumerStrategy',
+      message: expect.stringContaining(
+        'signet jwt verification loaded',
+      ) as string,
+    });
+  });
+
+  it('lets a @Public() route through and 401s a credential-less request with the plain challenge', async () => {
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    const response = await fetch(`${baseUrl}/me`);
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toBe(
+      'Bearer realm="acme", scope="acme:access"',
+    );
+  });
+
+  it('hands the principal to the handler on request.user, with nothing under requestPrincipalKey', async () => {
+    const response = await fetch(`${baseUrl}/me`, {
+      headers: { authorization: `Bearer ${await token('user-1')}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      user: { name: 'users:user-1' },
+    });
+    expect(lines).toContainEqual({
+      context: 'ConsumerStrategy',
+      message:
+        'signet principal authorized: metric=signet_principal_authorized reason=none source=users clientId=acme-cli environment=development',
+    });
+  });
+
+  it('403s a resolver refusal bare, with the generic message', async () => {
+    const response = await fetch(`${baseUrl}/me`, {
+      headers: { authorization: `Bearer ${await token('stranger')}` },
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers.get('www-authenticate')).toBeNull();
+    expect(await response.json()).toMatchObject({
+      message: 'this identity holds no authorization in this service',
+    });
+  });
+
+  it('403s a token without the admission scope with an insufficient_scope challenge', async () => {
+    const response = await fetch(`${baseUrl}/me`, {
+      headers: { authorization: `Bearer ${await token('user-1', ['openid'])}` },
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers.get('www-authenticate')).toContain(
+      'error="insufficient_scope"',
+    );
+  });
+
+  it('401s a bad signature with the same challenge as no token', async () => {
+    const other = await startTestIssuer();
+    try {
+      const forged = await other.signSignetToken({
+        audience: 'http://localhost/mcp',
+        clientId: 'acme-cli',
+        issuer: ISSUER,
+        scopes: ['acme:access'],
+        subject: 'user-1',
+      });
+      const response = await fetch(`${baseUrl}/me`, {
+        headers: { authorization: `Bearer ${forged}` },
+      });
+      expect(response.status).toBe(401);
+      expect(response.headers.get('www-authenticate')).toBe(
+        'Bearer realm="acme", scope="acme:access"',
+      );
+    } finally {
+      await other.close();
+    }
   });
 });

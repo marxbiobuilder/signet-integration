@@ -15,11 +15,10 @@ import {
 
 export const SIGNET_JWT_STRATEGY = 'signet-jwt';
 
-// Extracts `Authorization: Bearer <jwt>` and hands it to JwtVerifier.
-// passport-custom rather than passport-jwt: passport-jwt is a second JWT
-// implementation (jsonwebtoken) with its own JWKS story, and two verifiers
-// means two places to get the algorithm allowlist right. Only Passport's
-// registration and dispatch are borrowed; the cryptography stays in one place.
+// What a Signet strategy does before anything consumer-specific: read the
+// channel's settings once, build the verifier once (the remote JWKS cache
+// lives on it), and turn a request into a verified identity or a logged
+// `false`. SignetJwtStrategy and SignetPrincipalStrategy both hold one.
 //
 // Failure is `false`, never a throw. Passport moves to the next strategy only
 // on fail(); error() short-circuits the chain, and Nest turns a thrown
@@ -28,27 +27,21 @@ export const SIGNET_JWT_STRATEGY = 'signet-jwt';
 //
 // The log line carries the reason and the source address and NOTHING derived
 // from the token: no fingerprint, no sub.
-@Injectable()
-export class SignetJwtStrategy extends PassportStrategy(
-  Strategy,
-  SIGNET_JWT_STRATEGY,
-) {
-  private readonly logger = new Logger(SignetJwtStrategy.name);
+export class SignetBearerVerification {
   private readonly verifier: JwtVerifier | null;
 
   constructor(
     configService: ConfigService,
     profiles: SignetDeploymentProfileService,
-    @Inject(SIGNET_INTEGRATION_OPTIONS) options: SignetIntegrationOptions,
+    options: SignetIntegrationOptions,
+    private readonly logger: Logger,
   ) {
-    super();
     const config = readSignetAuthConfig(
       options,
       configService,
       profiles.profile,
     );
     if (config.signetEnabled) {
-      // Constructed once per process: the remote JWKS cache lives on it.
       this.verifier = new JwtVerifier(config.jwt);
       this.logger.log(
         `signet jwt verification loaded: iss=${config.jwt.issuer} aud=${config.jwt.audience}`,
@@ -58,7 +51,7 @@ export class SignetJwtStrategy extends PassportStrategy(
     }
   }
 
-  async validate(request: Request): Promise<VerifiedSignetIdentity | false> {
+  async verify(request: Request): Promise<VerifiedSignetIdentity | false> {
     if (this.verifier === null) return this.reject(request, 'signet_disabled');
     const token = bearerToken(request);
     if (token === undefined) {
@@ -79,6 +72,40 @@ export class SignetJwtStrategy extends PassportStrategy(
       `signet auth rejected: metric=signet_auth_rejected reason=${sanitiseLogToken(reason)} source=${sanitiseLogToken(request.ip ?? 'none')} method=${sanitiseLogToken(request.method)} route=${sanitiseLogToken(truncate(request.originalUrl, REFUSAL_ROUTE_MAX))}`,
     );
     return false;
+  }
+}
+
+// The strategy behind SignetBearerGuard: validate() is verification alone,
+// and the verified identity is what Passport leaves on request.user. The
+// guard then runs the module-wired resolver.
+//
+// passport-custom rather than passport-jwt: passport-jwt is a second JWT
+// implementation (jsonwebtoken) with its own JWKS story, and two verifiers
+// means two places to get the algorithm allowlist right. Only Passport's
+// registration and dispatch are borrowed; the cryptography stays in one place.
+@Injectable()
+export class SignetJwtStrategy extends PassportStrategy(
+  Strategy,
+  SIGNET_JWT_STRATEGY,
+) {
+  private readonly verification: SignetBearerVerification;
+
+  constructor(
+    configService: ConfigService,
+    profiles: SignetDeploymentProfileService,
+    @Inject(SIGNET_INTEGRATION_OPTIONS) options: SignetIntegrationOptions,
+  ) {
+    super();
+    this.verification = new SignetBearerVerification(
+      configService,
+      profiles,
+      options,
+      new Logger(SignetJwtStrategy.name),
+    );
+  }
+
+  validate(request: Request): Promise<VerifiedSignetIdentity | false> {
+    return this.verification.verify(request);
   }
 }
 
