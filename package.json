@@ -1,6 +1,6 @@
 {
   "name": "@marxbiotech/signet-integration",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Signet (OAuth 2.1 / OIDC) resource-server integration for NestJS: Bearer verification, RFC 6750 challenges, RFC 9728 metadata, deployment profile.",
   "license": "MIT",
   "repository": {
@@ -22,12 +22,19 @@
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
+    },
+    "./passport": {
+      "types": "./dist/passport/index.d.ts",
+      "default": "./dist/passport/index.js"
     }
   },
   "typesVersions": {
     "*": {
       "testing": [
         "dist/testing/index.d.ts"
+      ],
+      "passport": [
+        "dist/passport/index.d.ts"
       ]
     }
   },
@@ -57,6 +64,12 @@
   },
   "peerDependenciesMeta": {
     "@types/express": {
+      "optional": true
+    },
+    "@nestjs/swagger": {
+      "optional": true
+    },
+    "@nestjs/throttler": {
       "optional": true
     }
   },

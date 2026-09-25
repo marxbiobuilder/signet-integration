@@ -7,6 +7,37 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-25
+
+Passport 優先的分層：resolver 可以直接寫在你自己的 Passport strategy 裡，
+principal 由 Passport 掛到 `request.user`；套件提供 helper 讓 401／403／503／500
+分類與決策 log 在兩條路徑上完全一致。既有的 `forRoot` 路徑行為不變。
+
+### Added
+
+- `SignetPrincipalStrategy<P>`：抽象 strategy，subclass 實作 `resolve()`
+  （Passport verify callback 的形狀，身分已驗證），套件相依以 property injection
+  注入，建構子留給你。
+- `SignetPassportGuard`：`AuthGuard('signet-jwt')` 加 `@Public()` 與統一 401；
+  `SignetBearerGuard` 改為它的 subclass。
+- `SignetDecision`：admission scope、resolver 呼叫、結果分類、決策 log 的單一
+  實作；guard 與 strategy 都經過它。resolver 是參數而不是先呼叫，呼叫端沒有
+  地方能把 store 錯誤吞成 401。
+- `SignetIntegrationModule.forPassport({ options })`：不含 resolver 與 guard
+  的接線，給自帶 strategy 的 consumer。
+- `SignetBearerVerification`：strategy 共用的驗證步驟（讀設定、建 verifier、
+  拒絕時的 log），供自組 strategy 使用。
+- `@marxbiotech/signet-integration/passport` 子入口：主入口去掉 metadata
+  controller，不載入 `@nestjs/swagger` 與 `@nestjs/throttler`。
+
+### Changed
+
+- `@nestjs/swagger`、`@nestjs/throttler` 改為 optional peer；只有
+  `createProtectedResourceController` 需要。
+- `SignetBearerGuard` 建構子參數改為 `(resolver, SignetDecision, options,
+  Reflector)`；沒有自己建構子的 subclass（OrderSync）不受影響。
+
+
 ## [0.1.2] - 2026-09-24
 
 ### Changed
@@ -36,7 +67,8 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/marxbiobuilder/signet-integration/releases/tag/v0.1.1
 [0.1.0]: https://github.com/marxbiobuilder/signet-integration/releases/tag/v0.1.0

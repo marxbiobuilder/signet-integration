@@ -13,9 +13,11 @@ import {
   carriesScopeChallenge,
   InsufficientScopeException,
 } from './bearer-challenge';
+import { SignetDecision } from './decision';
 import { SignetBearerGuard } from './guard';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { type SignetIntegrationOptions } from './options';
+import { SignetPassportGuard } from './passport-guard';
 import {
   type PrincipalResolution,
   PrincipalStoreUnavailableError,
@@ -70,19 +72,23 @@ function makeGuard(
   options: SignetIntegrationOptions = FIXTURE_OPTIONS,
   publicRoute = false,
 ): SignetBearerGuard {
-  // AuthGuard(...) returns a fresh mixin class; its prototype is where Nest's
-  // canActivate lives, so the stub goes on the mixin's prototype.
   const guard = new SignetBearerGuard(
     { resolve },
-    { profile: FIXTURE_DEVELOPMENT_PROFILE },
+    new SignetDecision(options, { profile: FIXTURE_DEVELOPMENT_PROFILE }),
     options,
     reflectorOf(publicRoute),
   );
-  const base = Object.getPrototypeOf(
-    Object.getPrototypeOf(guard),
-  ) as InstanceType<ReturnType<typeof AuthGuard>>;
-  jest.spyOn(base, 'canActivate').mockImplementation(passport);
+  jest.spyOn(passportBase(), 'canActivate').mockImplementation(passport);
   return guard;
+}
+
+// AuthGuard(...) returns a fresh mixin class; its prototype is where Nest's
+// canActivate lives, so the stub goes on the mixin's prototype -- the parent
+// of SignetPassportGuard's, whatever the depth of the guard under test.
+function passportBase(): InstanceType<ReturnType<typeof AuthGuard>> {
+  return Object.getPrototypeOf(SignetPassportGuard.prototype) as InstanceType<
+    ReturnType<typeof AuthGuard>
+  >;
 }
 
 const authorized = (logFields?: Record<string, string>): jest.Mock =>
@@ -282,14 +288,13 @@ describe('SignetBearerGuard', () => {
     class ConsumerNamedGuard extends SignetBearerGuard {}
     const guard = new ConsumerNamedGuard(
       { resolve: authorized() },
-      { profile: FIXTURE_DEVELOPMENT_PROFILE },
+      new SignetDecision(FIXTURE_OPTIONS, {
+        profile: FIXTURE_DEVELOPMENT_PROFILE,
+      }),
       FIXTURE_OPTIONS,
       reflectorOf(false),
     );
-    const base = Object.getPrototypeOf(
-      Object.getPrototypeOf(Object.getPrototypeOf(guard)),
-    ) as InstanceType<ReturnType<typeof AuthGuard>>;
-    jest.spyOn(base, 'canActivate').mockResolvedValue(true);
+    jest.spyOn(passportBase(), 'canActivate').mockResolvedValue(true);
     await expect(
       guard.canActivate(makeContext(IDENTITY).context),
     ).resolves.toBe(true);
@@ -453,6 +458,13 @@ describe('SignetBearerGuard', () => {
   it('requires the principal resolver instead of inheriting AuthGuard’s optional first parameter', () => {
     expect(
       Reflect.getMetadata('optional:paramtypes', SignetBearerGuard) as unknown,
+    ).not.toContain(0);
+    // Same for the Passport-level guard, whose parameter 0 is the Reflector.
+    expect(
+      Reflect.getMetadata(
+        'optional:paramtypes',
+        SignetPassportGuard,
+      ) as unknown,
     ).not.toContain(0);
     // A consumer subclass with no constructor of its own (OrderSync's
     // SignetJwtAuthGuard) reads this class's metadata through the chain.
