@@ -6,7 +6,11 @@ import { Strategy } from 'passport-custom';
 
 import { readSignetAuthConfig } from './config';
 import { SignetDeploymentProfileService } from './deployment-profile';
-import { JwtVerifier, type VerifiedSignetIdentity } from './jwt-verifier';
+import {
+  JwtVerifier,
+  type VerifiedSignetIdentity,
+  type VerifyResult,
+} from './jwt-verifier';
 import { REFUSAL_ROUTE_MAX, sanitiseLogToken, truncate } from './log-sanitise';
 import {
   SIGNET_INTEGRATION_OPTIONS,
@@ -51,6 +55,12 @@ export class SignetBearerVerification {
     }
   }
 
+  // False when the channel's flag is off: a caller that must decide before
+  // it has a token (a login flow, before exchanging a code) asks here.
+  get enabled(): boolean {
+    return this.verifier !== null;
+  }
+
   async verify(request: Request): Promise<VerifiedSignetIdentity | false> {
     if (this.verifier === null) return this.reject(request, 'signet_disabled');
     const token = bearerToken(request);
@@ -61,9 +71,20 @@ export class SignetBearerVerification {
         present ? 'header_malformed' : 'header_missing',
       );
     }
-    const result = await this.verifier.verify(token);
+    const result = await this.verifyToken(token);
     if (!result.ok) return this.reject(request, result.reason);
     return result.identity;
+  }
+
+  // A token that did not arrive in a header -- one a login flow received
+  // from the token endpoint. Same verifier, same `signet_disabled`; but it
+  // writes NO line: the caller logs the reason under its own metric, with
+  // whatever request context it has.
+  async verifyToken(token: string): Promise<VerifyResult> {
+    if (this.verifier === null) {
+      return { ok: false, reason: 'signet_disabled' };
+    }
+    return this.verifier.verify(token);
   }
 
   // Every false path goes through here, so there is no unlogged rejection.

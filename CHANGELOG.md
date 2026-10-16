@@ -7,6 +7,15 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SignetBearerVerification.verifyToken(token)`：驗證不是從 `Authorization`
+  header 來的 token（例如 login flow 從 token endpoint 換到的），走同一個
+  verifier、同樣的 `signet_disabled`；回傳 `VerifyResult`，不寫 log，由呼叫端
+  用自己的 metric 記錄。`verify(request)` 改為呼叫它，行為不變。
+- `SignetBearerVerification.enabled`：旗標是否開啟，給拿到 token 之前就要
+  判斷的呼叫端（#4）。
+
 ## [0.2.0] - 2026-09-25
 
 Passport 優先的分層：resolver 可以直接寫在你自己的 Passport strategy 裡，
