@@ -19,6 +19,12 @@ export interface SignetEnvNames {
   // no legacy channel.
   readonly legacyApiKeyEnabled?: string;
   readonly signetEnabled?: string;
+  // The login flow (SignetLoginStrategy): the public client's id, and the
+  // secret the state cookie is encrypted under (at least 32 bytes). Read only
+  // by a registered login strategy, at its onModuleInit, and only with the
+  // Signet channel on; a consumer without one names neither.
+  readonly loginClientId?: string;
+  readonly loginStateSecret?: string;
 }
 
 export interface SignetDeployedProfile {

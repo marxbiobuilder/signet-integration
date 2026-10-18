@@ -3,7 +3,8 @@
 Signet (OAuth 2.1 / OIDC, Ory Hydra) **resource-server** integration for
 NestJS: Bearer access-token verification against the issuer's JWKS, RFC 6750
 `WWW-Authenticate` challenges, RFC 9728 protected-resource metadata, the
-deployment-profile pair check, and token-scope narrowing. Signet is treated as
+deployment-profile pair check, and token-scope narrowing -- plus the login
+(authorization code + PKCE) flow up to a verified identity. Signet is treated as
 an **auth provider**: this package proves `(iss, sub)` and hands the claims to
 your `SignetPrincipalResolver`; who that is locally, and how the mapping is
 stored, is yours.
@@ -109,6 +110,97 @@ Here Passport's `request.user` stays the verified identity and the principal
 goes under `options.requestPrincipalKey` (`principal`, say), which is what a
 consumer with several credential channels and its own dispatcher wants.
 
+### C. Logging users in (authorization code + PKCE)
+
+For a web app that signs people in with Signet and then runs on its own
+session: the browser goes through the authorization-code flow, the package
+exchanges the code, verifies the **access token** and runs your resolver --
+the same `SignetPrincipalResolver` contract as above, so one resolver class
+can serve both channels. What you do with the principal (issue a session
+cookie, redirect) is yours.
+
+```ts
+export const WEB_LOGIN = {
+  name: 'signet-login', // Passport strategy name; one entry per redirect URI
+  redirectUris: {       // verbatim as registered at the IdP; never built from Host
+    production: 'https://app.example.com/auth/signet/callback',
+    staging: 'https://app.staging.example.com/auth/signet/callback',
+    development: 'http://localhost:3000/auth/signet/callback',
+  },
+} as const satisfies SignetLoginEntry<'production' | 'staging'>;
+
+@Injectable()
+export class WebSignetLogin extends SignetLoginStrategy<User>(WEB_LOGIN) {
+  constructor(private readonly users: UsersService) { super(); }
+  async resolve(identity: VerifiedSignetIdentity): Promise<PrincipalResolution<User>> {
+    const user = await this.users.findByEmail(identity.claims.email as string);
+    return user ? { ok: true, principal: user } : { ok: false, reason: 'no_account' };
+  }
+}
+
+@Injectable()
+export class WebSignetCallbackGuard extends AuthGuard(WEB_LOGIN.name) {
+  override handleRequest<U>(error: Error | null, user: U): U {
+    if (error instanceof SignetLoginError) {
+      // error.reason: cancelled, state_invalid, token_exchange_failed, ...
+      throw new LoginFailedException(error.reason); // your UI: usually a 302 to the login page
+    }
+    if (error) throw error; // SignetDecision's 403/503/500, as on the Bearer channel
+    return user;
+  }
+}
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly signetLogin: WebSignetLogin) {}
+
+  @Public() @Get('signet')
+  async start(@Res() res: Response) {
+    res.redirect(await this.signetLogin.begin(res));
+  }
+
+  @Public() @Get('signet/callback') @UseGuards(WebSignetCallbackGuard)
+  async callback(@Req() req: Request, @Res() res: Response) { /* your session, then 302 */ }
+}
+
+@Module({
+  imports: [SignetIntegrationModule.forPassport({ options: APP_OPTIONS })],
+  providers: [WebSignetLogin],
+  controllers: [AuthController],
+})
+export class AuthModule {}
+```
+
+Name two more variables in `options.env`: `loginClientId` (the public
+client's id) and `loginStateSecret` (at least 32 bytes; the state cookie is
+encrypted under it). The strategy checks both at `onModuleInit` when the
+Signet flag is on; with the flag off it needs neither and both steps throw
+`SignetLoginError(DISABLED)`.
+
+What to know:
+
+- **The callback must NOT be guarded by `SignetPassportGuard`.** It folds
+  every 401 into a bare one and the reason is lost. Use `AuthGuard(entry.name)`
+  with `handleRequest` overridden, as above. A `SignetLoginError` that
+  escapes anyway is a bare 401; `BearerChallengeFilter` adds no
+  `WWW-Authenticate` to it.
+- Unlike the Bearer strategies, the login strategy's `validate()` throws:
+  the callback route has one strategy, and the UI must tell "you cancelled"
+  from "try again".
+- `begin()` must be reached on the same host as the redirect URI: the state
+  cookie is host-only and scoped to the redirect URI's path. A front end on
+  another host proxies `/auth/*` to the API.
+- The authorization request carries exactly one `resource`, the profile's
+  canonical resource, so the token's `aud` is what the verifier expects.
+  Claims your resolver reads must be in the access token: with Signet,
+  `email` is there only for a resource marked `erp: true` in its policy.
+- A token without the admission scope (the user unticked it at consent) is
+  `ADMISSION_SCOPE_NOT_GRANTED`, not `SignetDecision`'s re-authorise 403.
+- The rejection line is `signet login rejected: metric=signet_login_rejected
+  reason=<SignetLoginFailure> detail=… entry=… source=… route=<path>`; no
+  token, code, state or query string. The decision line after a verified
+  identity is `SignetDecision`'s, as on the Bearer channel.
+
 ### Entry points
 
 - `@marxbiotech/signet-integration` -- everything.
@@ -136,14 +228,21 @@ vocabulary).
 
 Testing: `@marxbiotech/signet-integration/testing` exports `startTestIssuer()`
 (a local JWKS endpoint plus a signer that mints tokens in the shape Signet
-issues), `startJwksServer()`, `FIXTURE_OPTIONS` and `FIXTURE_DEVELOPMENT_PROFILE`.
+issues), `startJwksServer()`, `FIXTURE_OPTIONS` and `FIXTURE_DEVELOPMENT_PROFILE`,
+and for the login flow `startTestAuthorizationServer({ clientId })`: discovery
+and a token endpoint that check PKCE, `redirect_uri` and `client_id`;
+`authorize(url, grant?)` / `deny(url, error?)` play the IdP's login page and
+return the callback URL; `scriptTokenEndpoint()` makes it fail (4xx with an
+OAuth error, 5xx, no `access_token`, no answer); `tokenRequests()` records
+what was sent.
 
 ## What is deliberately NOT here
 
 - How principals are stored (grant tables, a `users` column, a claim): the resolver's business.
 - Consumer credential dispatch between Bearer and a legacy channel.
 - Config validation of the env variables (see above).
-- The login (OIDC authorization-code) flow. This package is the resource-server side only.
+- Beyond a verified identity in the login flow: sessions, logout, refresh, where to return to after login (`returnTo` is an open-redirect surface; the package accepts no URL from a request).
+- Confidential clients (`client_secret_*`) and ID-token / nonce validation: the login flow is a public client with PKCE, and the identity comes from the access token.
 
 ## Rules a consumer relies on
 

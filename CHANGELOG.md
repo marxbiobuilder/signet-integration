@@ -19,6 +19,30 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SignetBearerRejectionEnum`（`DISABLED`、`HEADER_MISSING`、
   `HEADER_MALFORMED`）：`SignetBearerVerification` 自己產生的拒絕原因，與
   `JwtRejectionEnum` 並列。
+- Login flow（authorization code + PKCE，public client）到驗證身分為止：
+  - `SignetLoginStrategy<P>(entry)`：每個 `SignetLoginEntry`（一條 redirect
+    URI／環境）一個 Passport strategy 的 mixin；subclass 實作 `resolve()`，跟
+    Bearer 通道同一份 `SignetPrincipalResolver` 契約。`begin(res)` 寫 state
+    cookie 並回傳 authorization URL；callback 的 `validate()` 驗 state、換
+    code、驗 access token，再交給 `SignetDecision`。
+  - `SignetLoginError`／`SignetLoginFailureEnum`：login 路徑失敗一律 throw 並
+    帶 reason（與 Bearer 的「回 false、統一 401」不同），由 app 在
+    `AuthGuard(entry.name).handleRequest` 對應成 UI。缺 admission scope 是
+    `ADMISSION_SCOPE_NOT_GRANTED`。
+  - state cookie 以 `loginStateSecret` 經 HKDF 衍生的金鑰加密（JWE `dir` +
+    A256GCM），HttpOnly、SameSite=Lax、Path＝redirect URI 的 path，callback
+    時一律清除。
+  - 授權請求只帶一個 `resource`（canonical resource）；discovery 的 `issuer`
+    必須逐字相同，deployed 環境 endpoint 必須是 https；token 的 `client_id`
+    必須是 login client。
+  - `SignetEnvNames.loginClientId`／`loginStateSecret`（optional，只有登錄了
+    login strategy 且 Signet 旗標開啟時才讀）。
+  - testing：`startTestAuthorizationServer({ clientId })`。
+
+### Changed
+
+- `challengeFor`／`BearerChallengeFilter`：`SignetLoginError` 不加
+  `WWW-Authenticate`——瀏覽器登入失敗不是 Bearer 請求。
 
 ## [0.2.0] - 2026-09-25
 

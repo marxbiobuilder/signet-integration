@@ -2,6 +2,7 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 
 import { type ChannelFlags } from './config';
 import { type DeploymentProfile } from './deployment-profile';
+import { SignetLoginError } from './login-error';
 import { type SignetIntegrationOptions } from './options';
 
 // RFC 9728 §3.1: for a resource identifier WITH a path, the well-known
@@ -141,6 +142,8 @@ export type ChallengeDecision =
 //                                   in a carrier; the caller should log it)
 //   any other 403                 → no header: a wider OAuth scope supplies
 //                                   no local authorization
+//   SignetLoginError (a 401)      → no header: a browser login that failed is
+//                                   not a Bearer request
 //   401                           → Bearer challenge; resource_metadata only
 //                                   when the request IS the resource
 export function challengeFor(
@@ -150,7 +153,9 @@ export function challengeFor(
   exception: ForbiddenException | UnauthorizedException,
   requestPath: string,
 ): ChallengeDecision {
-  if (!channels.signetEnabled) return { header: null, malformedCarrier: false };
+  if (!channels.signetEnabled || exception instanceof SignetLoginError) {
+    return { header: null, malformedCarrier: false };
+  }
   if (exception instanceof ForbiddenException) {
     if (carriesScopeChallenge(exception)) {
       return {
