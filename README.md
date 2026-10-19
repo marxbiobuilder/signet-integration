@@ -179,8 +179,10 @@ rand -base64 32`) that the state cookie is encrypted under. At `onModuleInit`
 the strategy checks, whatever the Signet flag: that both names are given,
 and that the entry has a redirect URI for each deployed environment and
 development, and none for an environment the options do not name. With the
-flag on it also reads both values (refusing an empty client id or a secret
-under 32 bytes); with the flag off it reads neither, and both steps throw
+flag on it also reads both values and checks the issuer (refusing an issuer
+that is not an http(s) URL, a client id that is empty or padded with
+whitespace -- a mounted secret's trailing newline -- or a secret under 32
+bytes); with the flag off it reads neither, and both steps throw
 `SignetLoginError(DISABLED)`. If your subclass overrides `onModuleInit`, call
 `super.onModuleInit()`; without it the flow is still built, at the first
 login, and these checks move there.
@@ -256,8 +258,9 @@ Requirements: `ConfigModule` must be global (the strategy, filter and profile
 service inject `ConfigService`); validate the env variables named in `options.env`
 in your own config validation (Joi or otherwise), the package only re-checks the
 clock tolerance and throws on a missing issuer or JWKS URI -- and, with a login
-strategy and the flag on, on a missing or empty login client id or a state
-secret under 32 bytes.
+strategy and the flag on, on an issuer that is not an http(s) URL, a login
+client id that is missing, empty or padded with whitespace, or a state secret
+that is missing or under 32 bytes.
 
 Handlers get a typed principal through
 `createSignetPrincipalDecorator(MY_OPTIONS, isMyPrincipal)`; Nest does not check

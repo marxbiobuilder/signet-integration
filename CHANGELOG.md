@@ -43,7 +43,9 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     redirect，逾時各 5 秒且涵蓋讀取 body。
   - `SignetEnvNames.login`（optional，`{ clientId, stateSecret }`）：登錄了
     login strategy 時，名稱在 `onModuleInit` 檢查（不論旗標）；值只在 Signet
-    旗標開啟時讀，拒絕空的 client id 與不足 32 bytes 的 secret。
+    旗標開啟時讀，拒絕空的或前後帶空白的 client id、不足 32 bytes 的
+    secret，以及不是 http(s) URL 的 issuer（否則每次登入都會被歸成
+    transport 失敗）。
   - entry 在建立 class 時驗證並凍結成副本（名稱、scope token、每個環境的
     redirect URI）；`onModuleInit` 時再對照 options 的 deployed 環境，缺少或
     多出都會失敗。subclass 覆寫 `onModuleInit` 而沒呼叫 super 時，flow 會在

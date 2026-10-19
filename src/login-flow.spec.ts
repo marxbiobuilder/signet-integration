@@ -686,7 +686,9 @@ describe('SignetLoginFlow', () => {
             }),
           ).toBe(SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED);
           expect(elsewhere).toBe(0);
-          expect(loggedLines()).toContain('detail=TypeError');
+          // A cause label after the name (TypeError:Error on Node 22's
+          // undici): the refusal is told apart from a bare TypeError.
+          expect(loggedLines()).toMatch(/detail=TypeError:\S+ /);
         } finally {
           await new Promise<void>((resolve) => sink.close(() => resolve()));
         }
@@ -939,10 +941,38 @@ describe('SignetLoginFlow', () => {
       );
     });
 
-    it('refuses an empty client id', () => {
-      expect(() => build({ env: { ACME_LOGIN_CLIENT_ID: ' ' } })).toThrow(
-        'ACME_LOGIN_CLIENT_ID must not be empty',
-      );
+    it.each(['', ' ', 'acme-web\n', ' acme-web'])(
+      'refuses the client id %j: empty, or with whitespace a mounted secret might carry',
+      (clientId) => {
+        expect(() =>
+          build({ env: { ACME_LOGIN_CLIENT_ID: clientId } }),
+        ).toThrow(
+          'ACME_LOGIN_CLIENT_ID must not be empty or carry leading or trailing whitespace',
+        );
+      },
+    );
+
+    it.each([
+      ['signet.example', 'is not a URL'],
+      ['localhost:8080', 'is not an http(s) URL'],
+    ])(
+      'refuses the issuer %j at boot, not as a transport failure at every login',
+      (issuer, problem) => {
+        expect(() => build({ env: { ACME_JWT_ISSUER: issuer } })).toThrow(
+          `ACME_JWT_ISSUER ${problem} for the login flow's discovery`,
+        );
+      },
+    );
+
+    it('does not judge the issuer with the flag off', () => {
+      expect(() =>
+        build({
+          env: {
+            ACME_JWT_ISSUER: 'signet.example',
+            ACME_SIGNET_ENABLED: 'false',
+          },
+        }),
+      ).not.toThrow();
     });
 
     it('refuses a state secret shorter than 32 bytes, naming its variable', () => {

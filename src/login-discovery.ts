@@ -42,6 +42,23 @@ export function discoveryUrl(issuer: string): string {
   return `${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`;
 }
 
+// What is wrong with an issuer as the place to fetch discovery from, or
+// undefined. Checked at construction by the login flow: an issuer that is
+// not an http(s) URL -- a missing scheme, say, which `localhost:8080` parses
+// as -- would otherwise fail every login as a "transport" error
+// (TypeError:ERR_INVALID_URL) after a clean boot.
+export function issuerProblem(issuer: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(discoveryUrl(issuer));
+  } catch {
+    return 'is not a URL';
+  }
+  return url.protocol === 'https:' || url.protocol === 'http:'
+    ? undefined
+    : 'is not an http(s) URL';
+}
+
 export class LoginDiscovery {
   private pending: Promise<LoginEndpoints> | undefined;
 

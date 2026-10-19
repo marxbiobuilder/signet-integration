@@ -6,6 +6,7 @@ import { type SignetDeploymentProfileService } from './deployment-profile';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { REFUSAL_ROUTE_MAX, sanitiseLogToken, truncate } from './log-sanitise';
 import {
+  issuerProblem,
   LoginDiscovery,
   LoginDiscoveryError,
   type LoginEndpoints,
@@ -127,9 +128,19 @@ export class SignetLoginFlow {
       this.settings = null;
       return;
     }
+    const problem = issuerProblem(issuer);
+    if (problem !== undefined) {
+      throw new Error(
+        `${options.env.jwtIssuer} ${problem} for the login flow's discovery`,
+      );
+    }
     const clientId = configService.getOrThrow<string>(names.clientId);
-    if (clientId.trim() === '') {
-      throw new Error(`${names.clientId} must not be empty`);
+    // Sent verbatim as client_id: a trailing newline from a mounted secret
+    // would otherwise fail only at the IdP.
+    if (clientId === '' || clientId !== clientId.trim()) {
+      throw new Error(
+        `${names.clientId} must not be empty or carry leading or trailing whitespace`,
+      );
     }
     this.settings = {
       clientId,

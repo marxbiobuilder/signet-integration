@@ -4,8 +4,11 @@
 // timeout covering the body as well as the headers, and a JSON body parsed
 // apart from the transport so the two failures stay distinguishable.
 
-// The request never produced a whole response: refused, reset, redirected,
-// timed out, or a body that stalled. `detail` is transportFailure()'s.
+// Any rejection of fetch() or of reading its body: refused, reset, a
+// redirect refused, timed out, a body that stalled. fetch() cannot tell those
+// from its own argument errors, so the URLs are checked before they get
+// here (the issuer at construction, the endpoints by discovery) and nothing
+// else this file passes can be malformed. `detail` is transportFailure()'s.
 export class LoginTransportError extends Error {
   constructor(readonly detail: string) {
     super(`signet login transport failed: ${detail}`);
@@ -26,6 +29,8 @@ export async function fetchJson(
   init: { body?: URLSearchParams; method?: 'GET' | 'POST' },
   timeoutMs: number,
 ): Promise<JsonResponse> {
+  // Outside the try: a bad timeout is this process's defect, not transport.
+  const signal = AbortSignal.timeout(timeoutMs);
   let response: Response;
   let text: string;
   try {
@@ -39,7 +44,7 @@ export async function fetchJson(
       },
       method: init.method ?? 'GET',
       redirect: 'error',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
     // Inside the try: the timeout covers the body too.
     text = await response.text();
@@ -63,13 +68,15 @@ export async function fetchJson(
   }
 }
 
-// A fetch that never produced a response: the error's name (TimeoutError,
-// TypeError) and what its cause says -- Node's errno code when there is one
-// (ECONNREFUSED), else the cause's own name, which tells undici's "fetch
-// failed" (a redirect refused, a reset) from a bare TypeError. Never a
-// message, which can carry the URL. Matched by shape: undici's DOMException
-// and Node's system errors are created outside a test runner's vm realm,
-// where instanceof Error is false.
+// A fetch that never produced a response, as `<name>[:<cause>]`: the error's
+// name, then its cause's code when it has one, else its cause's name. On
+// Node 22's undici that reads TimeoutError (a timeout, the body's included),
+// TypeError:ECONNREFUSED (nothing listening), TypeError:UND_ERR_SOCKET (the
+// connection reset) and TypeError:Error (a redirect refused). The exact
+// labels are undici's and may shift with it; the shape is this function's.
+// Never a message, which can carry the URL. Matched by shape: undici's
+// DOMException and Node's system errors are created outside a test runner's
+// vm realm, where instanceof Error is false.
 export function transportFailure(error: unknown): string {
   const { cause, name } = (error ?? {}) as {
     cause?: { code?: unknown; name?: unknown };
