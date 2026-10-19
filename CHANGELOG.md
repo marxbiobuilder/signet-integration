@@ -7,6 +7,12 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 發佈 workflow 支援 prerelease：版本號帶 prerelease 時，以第一個 prerelease
+  識別字當 npm dist-tag（`0.3.0-beta.0` 發成 `beta`），不再落到 `latest`。識
+  別字不是字母開頭或為 `latest` 時拒絕發佈。
+
 ## [0.2.0] - 2026-09-25
 
 Passport 優先的分層：resolver 可以直接寫在你自己的 Passport strategy 裡，
