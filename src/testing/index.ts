@@ -1,4 +1,5 @@
 export {
+  type DiscoveryScript,
   startTestAuthorizationServer,
   type TestAuthorizationServer,
   type TestAuthorizationServerOptions,

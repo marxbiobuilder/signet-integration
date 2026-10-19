@@ -24,16 +24,23 @@ export interface SignetLoginEntry<E extends string = string> {
 }
 
 const ENTRY_NAME = /^[a-z][a-z0-9-]*$/;
+// RFC 6749 §3.3 scope-token: no space (the list separator), no quote or
+// backslash, at least one character.
+const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   'localhost',
   '127.0.0.1',
   '[::1]',
 ]);
 
-// Checked when the strategy class is created, env-free: the name, and every
-// environment's redirect URI -- so a typo in production's fails on a
-// developer's machine, not on the day of the deploy.
-export function validateLoginEntry(entry: SignetLoginEntry): void {
+// Checked when the strategy class is created, env-free: the name, the
+// scopes, and every environment's redirect URI -- so a malformed or
+// non-https production URI fails on a developer's machine (a misspelt host
+// or path still fails only at the IdP). Returns a frozen copy, which is all
+// the strategy keeps: the Passport name is taken now, the cookie name and
+// the URIs later, and a caller mutating its own object in between must not
+// pull them apart.
+export function validateLoginEntry(entry: SignetLoginEntry): SignetLoginEntry {
   const { name } = entry;
   if (!ENTRY_NAME.test(name)) {
     throw new Error(
@@ -45,8 +52,46 @@ export function validateLoginEntry(entry: SignetLoginEntry): void {
       `invalid SignetLoginEntry: name ${name} is the Bearer strategy's`,
     );
   }
+  for (const scope of entry.scopes ?? []) {
+    if (!SCOPE_TOKEN.test(scope)) {
+      throw new Error(
+        `invalid SignetLoginEntry ${name}: scope ${JSON.stringify(scope)} is not a scope token (RFC 6749 §3.3)`,
+      );
+    }
+  }
   for (const [environment, raw] of Object.entries(entry.redirectUris)) {
     checkRedirectUri(name, environment, raw);
+  }
+  return Object.freeze({
+    name,
+    redirectUris: Object.freeze({ ...entry.redirectUris }),
+    ...(entry.scopes === undefined
+      ? {}
+      : { scopes: Object.freeze([...entry.scopes]) }),
+  });
+}
+
+// The entry's environments against the options': one redirect URI for each
+// deployed environment and for development, and none for an environment the
+// options do not know (a misspelling such as `prodution`). Env-free, so it
+// runs with the Signet flag off too.
+export function checkLoginEntryEnvironments(
+  entry: SignetLoginEntry,
+  deployedEnvironments: readonly string[],
+): void {
+  const expected = new Set([...deployedEnvironments, DEVELOPMENT_ENVIRONMENT]);
+  const given = new Set(Object.keys(entry.redirectUris));
+  const missing = [...expected].filter((e) => !given.has(e));
+  const unknown = [...given].filter((e) => !expected.has(e));
+  if (missing.length > 0) {
+    throw new Error(
+      `invalid SignetLoginEntry ${entry.name}: no redirect URI for ${missing.join(', ')}`,
+    );
+  }
+  if (unknown.length > 0) {
+    throw new Error(
+      `invalid SignetLoginEntry ${entry.name}: redirect URI for an environment the options do not name: ${unknown.join(', ')}`,
+    );
   }
 }
 

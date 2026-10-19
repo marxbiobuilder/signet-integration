@@ -1,44 +1,35 @@
-import { Logger } from '@nestjs/common';
-import { type ConfigService } from '@nestjs/config';
-import { type Request, type Response } from 'express';
-import { decodeProtectedHeader } from 'jose';
+import { createServer } from 'node:http';
+import { type AddressInfo } from 'node:net';
 
+import { Logger } from '@nestjs/common';
+import { type Request, type Response } from 'express';
+import { decodeProtectedHeader, EncryptJWT } from 'jose';
+
+import { configOf } from './__spec__/fake-config';
+import {
+  LOGIN_CALLBACK_PATH as CALLBACK_PATH,
+  LOGIN_CLIENT_ID as CLIENT_ID,
+  LOGIN_ENTRY as ENTRY,
+  LOGIN_OPTIONS as OPTIONS,
+  LOGIN_STATE_SECRET as SECRET,
+  loginEnv,
+} from './__spec__/login-fixture';
 import { type DeploymentProfile } from './deployment-profile';
-import { discoveryUrl } from './login-discovery';
+import { discoveryUrl, LoginDiscovery } from './login-discovery';
 import { type SignetLoginEntry } from './login-entry';
 import { SignetLoginError, SignetLoginFailureEnum } from './login-error';
 import { SignetLoginFlow } from './login-flow';
+import { codeChallenge, loginStateKey } from './login-state';
 import { type SignetIntegrationOptions } from './options';
 import {
   startTestAuthorizationServer,
   type TestAuthorizationServer,
+  type TokenEndpointScript,
 } from './testing/authorization-server';
 import {
   FIXTURE_DEVELOPMENT_PROFILE,
   FIXTURE_OPTIONS,
 } from './testing/fixture';
-
-const CLIENT_ID = 'acme-web';
-const SECRET = 'a-login-state-secret-of-32-bytes!';
-const CALLBACK_PATH = '/auth/signet/callback';
-
-const ENTRY: SignetLoginEntry<'production' | 'staging'> = {
-  name: 'acme-login',
-  redirectUris: {
-    development: `http://localhost:3000${CALLBACK_PATH}`,
-    production: `https://acme.example${CALLBACK_PATH}`,
-    staging: `https://acme.staging.example${CALLBACK_PATH}`,
-  },
-};
-
-const OPTIONS: SignetIntegrationOptions = {
-  ...FIXTURE_OPTIONS,
-  env: {
-    ...FIXTURE_OPTIONS.env,
-    loginClientId: 'ACME_LOGIN_CLIENT_ID',
-    loginStateSecret: 'ACME_LOGIN_STATE_SECRET',
-  },
-};
 
 const PRODUCTION_PROFILE: DeploymentProfile = {
   canonicalResource: 'https://acme.example/mcp',
@@ -47,16 +38,13 @@ const PRODUCTION_PROFILE: DeploymentProfile = {
   namespace: 'acme-production',
 };
 
-function configOf(env: Record<string, string | undefined>): ConfigService {
-  return {
-    get: (key: string, fallback?: unknown) => env[key] ?? fallback,
-    getOrThrow: (key: string) => {
-      const value = env[key];
-      if (value === undefined) throw new Error(`${key} missing`);
-      return value;
-    },
-  } as unknown as ConfigService;
-}
+const HTTPS_DISCOVERY = (issuer: string) => ({
+  document: {
+    authorization_endpoint: 'https://idp.example/oauth2/auth',
+    issuer,
+    token_endpoint: 'https://idp.example/oauth2/token',
+  },
+});
 
 describe('SignetLoginFlow', () => {
   let server: TestAuthorizationServer;
@@ -75,21 +63,12 @@ describe('SignetLoginFlow', () => {
     logger = new Logger('spec');
     jest.spyOn(logger, 'log').mockImplementation();
     warn = jest.spyOn(logger, 'warn').mockImplementation();
-    server.scriptTokenEndpoint(null);
-    server.discovery(null);
-  });
-
-  const env = (overrides: Record<string, string | undefined> = {}) => ({
-    ACME_JWT_ISSUER: server.issuer,
-    ACME_JWT_JWKS_URI: server.jwksUri,
-    ACME_LOGIN_CLIENT_ID: CLIENT_ID,
-    ACME_LOGIN_STATE_SECRET: SECRET,
-    ACME_SIGNET_ENABLED: 'true',
-    ...overrides,
+    server.reset();
   });
 
   const build = (
     input: {
+      discoveryMs?: number;
       entry?: SignetLoginEntry;
       env?: Record<string, string | undefined>;
       options?: SignetIntegrationOptions;
@@ -99,16 +78,19 @@ describe('SignetLoginFlow', () => {
   ) =>
     new SignetLoginFlow(
       input.entry ?? ENTRY,
-      configOf(input.env ?? env()),
+      configOf(loginEnv(server, input.env)),
       { profile: input.profile ?? FIXTURE_DEVELOPMENT_PROFILE },
       input.options ?? OPTIONS,
       logger,
-      { discoveryMs: 2_000, tokenMs: input.tokenMs ?? 2_000 },
+      {
+        discoveryMs: input.discoveryMs ?? 2_000,
+        tokenMs: input.tokenMs ?? 2_000,
+      },
     );
 
-  // begin() against a fake Express response: the authorization URL and the
-  // Set-Cookie it appended.
-  const begin = async (
+  // begin() against a fake Express response: the authorization URL (or the
+  // refusal) and every Set-Cookie it appended.
+  const attemptBegin = async (
     flow: SignetLoginFlow,
     headers: Record<string, string> = {},
   ) => {
@@ -120,13 +102,22 @@ describe('SignetLoginFlow', () => {
       },
       req: { headers, ip: '127.0.0.1', path: '/auth/signet' },
     } as unknown as Response;
-    const url = await flow.begin(response);
-    expect(setCookie).toHaveLength(1);
-    return {
-      cookie: setCookie[0].split(';')[0],
-      setCookie: setCookie[0],
-      url,
-    };
+    const outcome = await flow.begin(response).then(
+      (url) => ({ url }),
+      (error: unknown) => ({ error }),
+    );
+    return { ...outcome, setCookie };
+  };
+
+  const begin = async (
+    flow: SignetLoginFlow,
+    headers: Record<string, string> = {},
+  ) => {
+    const attempt = await attemptBegin(flow, headers);
+    if ('error' in attempt) throw attempt.error;
+    expect(attempt.setCookie).toHaveLength(1);
+    const setCookie = attempt.setCookie[0];
+    return { cookie: setCookie.split(';')[0], setCookie, url: attempt.url };
   };
 
   // The browser arriving at the callback: the IdP's redirect URL, and the
@@ -159,6 +150,18 @@ describe('SignetLoginFlow', () => {
 
   const loggedLines = () =>
     warn.mock.calls.map(([line]) => String(line)).join('\n');
+
+  // A cookie sealed with this secret but not by sealLoginState: what only a
+  // holder of the key could produce, for the shape checks.
+  const sealRaw = (payload: Record<string, unknown>, withExp = true) => {
+    const jwt = new EncryptJWT(payload).setProtectedHeader({
+      alg: 'dir',
+      enc: 'A256GCM',
+    });
+    return (withExp ? jwt.setExpirationTime('5m') : jwt).encrypt(
+      loginStateKey(SECRET, 'spec'),
+    );
+  };
 
   describe('begin', () => {
     it('builds the authorization request: code, PKCE S256, the exact redirect URI, the scopes and ONE resource', async () => {
@@ -201,10 +204,8 @@ describe('SignetLoginFlow', () => {
     it('sets an encrypted, HttpOnly, Lax state cookie scoped to the callback path', async () => {
       const { setCookie, url } = await begin(build());
       const [pair, ...attributes] = setCookie.split('; ');
-      const [name, value] = [
-        pair.split('=')[0],
-        pair.slice(pair.indexOf('=') + 1),
-      ];
+      const name = pair.slice(0, pair.indexOf('='));
+      const value = pair.slice(pair.indexOf('=') + 1);
       expect(name).toBe('signet_login.acme-login');
       expect(attributes).toEqual([
         `Path=${CALLBACK_PATH}`,
@@ -220,15 +221,36 @@ describe('SignetLoginFlow', () => {
       expect(value).not.toContain(new URL(url).searchParams.get('state'));
     });
 
-    it('marks the cookie Secure for an https redirect URI', async () => {
-      server.discovery({
-        authorization_endpoint: 'https://idp.example/oauth2/auth',
-        issuer: server.issuer,
-        token_endpoint: 'https://idp.example/oauth2/token',
-      });
-      const { setCookie } = await begin(build({ profile: PRODUCTION_PROFILE }));
+    it('marks the cookie Secure for an https redirect URI, and its clearing too', async () => {
+      server.overrideDiscovery(HTTPS_DISCOVERY(server.issuer));
+      const flow = build({ profile: PRODUCTION_PROFILE });
+      const { setCookie } = await begin(flow);
       expect(setCookie).toContain(`Path=${CALLBACK_PATH}`);
       expect(setCookie.endsWith('; Secure')).toBe(true);
+      const { cleared, request } = callback(
+        `https://acme.example${CALLBACK_PATH}?error=access_denied&state=x`,
+      );
+      await rejection(flow.complete(request));
+      expect(cleared[0].endsWith('; Secure')).toBe(true);
+    });
+
+    it('sets no cookie when discovery fails', async () => {
+      server.overrideDiscovery({ status: 503 });
+      const attempt = await attemptBegin(build());
+      expect('error' in attempt && attempt.error).toBeInstanceOf(
+        SignetLoginError,
+      );
+      expect(attempt.setCookie).toEqual([]);
+    });
+
+    it('sets no cookie when the flag is off', async () => {
+      const attempt = await attemptBegin(
+        build({ env: { ACME_SIGNET_ENABLED: 'false' } }),
+      );
+      expect('error' in attempt && attempt.error).toBeInstanceOf(
+        SignetLoginError,
+      );
+      expect(attempt.setCookie).toEqual([]);
     });
   });
 
@@ -253,7 +275,11 @@ describe('SignetLoginFlow', () => {
         grant_type: 'authorization_code',
         redirect_uri: ENTRY.redirectUris.development,
       });
-      expect(sent.code_verifier).toMatch(/^[\w-]{43}$/);
+      // The verifier is the one whose S256 the authorization request sent:
+      // checked here, not left to the test server.
+      expect(codeChallenge(sent.code_verifier)).toBe(
+        new URL(url).searchParams.get('code_challenge'),
+      );
     });
 
     it('clears the state cookie on the callback, on the same path', async () => {
@@ -274,7 +300,7 @@ describe('SignetLoginFlow', () => {
       expect(cleared).toHaveLength(1);
     });
 
-    it('answers CANCELLED for access_denied and IDP_ERROR for any other error', async () => {
+    it('answers CANCELLED for access_denied and IDP_ERROR for any other error, once the state checks out', async () => {
       const flow = build();
       const first = await begin(flow);
       expect(
@@ -296,6 +322,31 @@ describe('SignetLoginFlow', () => {
       );
     });
 
+    it('checks the state before reading an error: a forged error=access_denied is STATE_INVALID, not CANCELLED', async () => {
+      const flow = build();
+      const { cookie } = await begin(flow);
+      expect(
+        await rejection(
+          flow.complete(
+            callback(
+              `http://localhost:3000${CALLBACK_PATH}?error=access_denied&state=forged`,
+              cookie,
+            ).request,
+          ),
+        ),
+      ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+      expect(
+        await rejection(
+          flow.complete(
+            callback(
+              `http://localhost:3000${CALLBACK_PATH}?error=access_denied`,
+            ).request,
+          ),
+        ),
+      ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+      expect(loggedLines()).not.toContain('reason=cancelled');
+    });
+
     it('answers IDP_ERROR for a redirect with neither code nor error', async () => {
       const flow = build();
       const { cookie, url } = await begin(flow);
@@ -308,22 +359,46 @@ describe('SignetLoginFlow', () => {
       ).toBe(SignetLoginFailureEnum.IDP_ERROR);
     });
 
+    it('keeps the IdP’s error from forging fields, and clips it', async () => {
+      const flow = build();
+      const first = await begin(flow);
+      await rejection(
+        flow.complete(
+          callback(
+            server.deny(first.url, 'x reason=cancelled\nmetric=forged'),
+            first.cookie,
+          ).request,
+        ),
+      );
+      expect(loggedLines()).toContain(
+        'detail=x_reason_cancelled_metric_forged ',
+      );
+      const second = await begin(flow);
+      await rejection(
+        flow.complete(
+          callback(server.deny(second.url, 'e'.repeat(150)), second.cookie)
+            .request,
+        ),
+      );
+      expect(loggedLines()).toContain(`detail=${'e'.repeat(100)}…(truncated)`);
+    });
+
     describe('state', () => {
       it('refuses a state that does not match the cookie’s, before calling the token endpoint', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
         const back = new URL(server.authorize(url));
         back.searchParams.set('state', 'someone-elses-state');
-        const before = server.tokenRequests().length;
         expect(
           await rejection(
             flow.complete(callback(back.toString(), cookie).request),
           ),
         ).toBe(SignetLoginFailureEnum.STATE_INVALID);
-        expect(server.tokenRequests()).toHaveLength(before);
+        expect(server.tokenRequests()).toHaveLength(0);
+        expect(loggedLines()).toContain('reason=state_invalid detail=state ');
       });
 
-      it('refuses a callback with no state cookie', async () => {
+      it('names a missing cookie cookie_missing', async () => {
         const flow = build();
         const { url } = await begin(flow);
         expect(
@@ -331,9 +406,10 @@ describe('SignetLoginFlow', () => {
             flow.complete(callback(server.authorize(url)).request),
           ),
         ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+        expect(loggedLines()).toContain('detail=cookie_missing ');
       });
 
-      it('refuses a cookie that was tampered with', async () => {
+      it('names a tampered cookie unopenable', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
         const flipped =
@@ -345,13 +421,12 @@ describe('SignetLoginFlow', () => {
             flow.complete(callback(server.authorize(url), flipped).request),
           ),
         ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+        expect(loggedLines()).toContain('detail=unopenable ');
       });
 
-      it('refuses a cookie sealed under another secret', async () => {
+      it('names a cookie sealed under another secret unopenable -- what replicas with different secrets would show', async () => {
         const other = build({
-          env: env({
-            ACME_LOGIN_STATE_SECRET: 'another-secret-also-32-bytes-long',
-          }),
+          env: { ACME_LOGIN_STATE_SECRET: 'another-secret-also-32-bytes-long' },
         });
         const { cookie, url } = await begin(other);
         expect(
@@ -359,9 +434,10 @@ describe('SignetLoginFlow', () => {
             build().complete(callback(server.authorize(url), cookie).request),
           ),
         ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+        expect(loggedLines()).toContain('detail=unopenable ');
       });
 
-      it('refuses a state issued for another entry, even under this entry’s cookie name', async () => {
+      it('names a state issued for another entry, even under this entry’s cookie name, entry', async () => {
         const other = build({ entry: { ...ENTRY, name: 'other-login' } });
         const { cookie, url } = await begin(other);
         const renamed = cookie.replace(
@@ -373,10 +449,10 @@ describe('SignetLoginFlow', () => {
             build().complete(callback(server.authorize(url), renamed).request),
           ),
         ).toBe(SignetLoginFailureEnum.STATE_INVALID);
-        expect(loggedLines()).toContain('reason=state_invalid detail=entry');
+        expect(loggedLines()).toContain('reason=state_invalid detail=entry ');
       });
 
-      it('refuses a state older than ten minutes', async () => {
+      it('names a state older than LOGIN_STATE_TTL_S expired', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
         const back = server.authorize(url);
@@ -403,14 +479,41 @@ describe('SignetLoginFlow', () => {
         } finally {
           jest.useRealTimers();
         }
-        expect(loggedLines()).toContain('reason=state_invalid detail=cookie');
+        expect(loggedLines()).toContain('reason=state_invalid detail=expired ');
+      });
+
+      it.each([
+        ['without the state fields', { entry: 'acme-login' }, true],
+        [
+          'with a field of the wrong type',
+          { entry: 1, state: 's', verifier: 'v' },
+          true,
+        ],
+        [
+          'without exp',
+          { entry: 'acme-login', state: 's', verifier: 'v' },
+          false,
+        ],
+      ])('names an opened value %s malformed', async (_, payload, withExp) => {
+        const sealed = await sealRaw(payload, withExp);
+        expect(
+          await rejection(
+            build().complete(
+              callback(
+                `http://localhost:3000${CALLBACK_PATH}?code=c&state=s`,
+                `signet_login.acme-login=${sealed}`,
+              ).request,
+            ),
+          ),
+        ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+        expect(loggedLines()).toContain('detail=malformed ');
       });
 
       it('refuses a repeated state parameter', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
         const back = new URL(server.authorize(url));
-        const state = back.searchParams.get('state')!;
+        const state = back.searchParams.get('state');
         const { request } = callback(back.toString(), cookie, {
           code: back.searchParams.get('code'),
           state: [state, state],
@@ -420,20 +523,28 @@ describe('SignetLoginFlow', () => {
         );
       });
 
-      it('accepts the current state beside a stale cookie of the same name', async () => {
-        const flow = build();
-        const stale = await begin(flow);
-        const { cookie, url } = await begin(flow);
-        const identity = await flow.complete(
-          callback(server.authorize(url), `${stale.cookie}; ${cookie}`).request,
-        );
-        expect(identity.subject).toBe('test-user');
-      });
+      it.each([
+        ['after', (stale: string, current: string) => `${stale}; ${current}`],
+        // What a browser sends: the longer path first (RFC 6265 §5.4).
+        ['before', (stale: string, current: string) => `${current}; ${stale}`],
+      ])(
+        'accepts the current state with a stale cookie of the same name sent %s it',
+        async (_, order) => {
+          const flow = build();
+          const stale = await begin(flow);
+          const { cookie, url } = await begin(flow);
+          const identity = await flow.complete(
+            callback(server.authorize(url), order(stale.cookie, cookie))
+              .request,
+          );
+          expect(identity.subject).toBe('test-user');
+        },
+      );
     });
 
     describe('token exchange', () => {
       const exchangeFails = async (
-        script: Parameters<TestAuthorizationServer['scriptTokenEndpoint']>[0],
+        script: TokenEndpointScript,
         tokenMs?: number,
       ) => {
         const flow = build({ tokenMs });
@@ -466,6 +577,13 @@ describe('SignetLoginFlow', () => {
         expect(loggedLines()).toContain('detail=access_token_missing');
       });
 
+      it('names a 200 whose body is not JSON body_not_json', async () => {
+        expect(await exchangeFails({ body: undefined })).toBe(
+          SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
+        );
+        expect(loggedLines()).toContain('detail=body_not_json');
+      });
+
       it('gives up on a token endpoint that does not answer', async () => {
         expect(await exchangeFails({ hang: true }, 200)).toBe(
           SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
@@ -480,11 +598,28 @@ describe('SignetLoginFlow', () => {
         expect(loggedLines()).toContain('detail=TimeoutError');
       });
 
-      it('treats a 200 whose body is not JSON as a missing token', async () => {
-        expect(await exchangeFails({ body: undefined })).toBe(
-          SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
+      it('does not follow a redirect: the code and verifier go nowhere else', async () => {
+        let elsewhere = 0;
+        const sink = createServer((_, response) => {
+          elsewhere += 1;
+          response.end();
+        });
+        await new Promise<void>((resolve) =>
+          sink.listen(0, '127.0.0.1', resolve),
         );
-        expect(loggedLines()).toContain('detail=access_token_missing');
+        const { port } = sink.address() as AddressInfo;
+        try {
+          expect(
+            await exchangeFails({
+              location: `http://127.0.0.1:${port}/steal`,
+              status: 307,
+            }),
+          ).toBe(SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED);
+          expect(elsewhere).toBe(0);
+          expect(loggedLines()).toContain('detail=TypeError');
+        } finally {
+          await new Promise<void>((resolve) => sink.close(() => resolve()));
+        }
       });
 
       it('refuses a code the server already redeemed', async () => {
@@ -556,31 +691,123 @@ describe('SignetLoginFlow', () => {
   });
 
   describe('discovery', () => {
-    it('refuses a document for another issuer, and does not cache the failure', async () => {
-      const flow = build();
-      server.discovery({
-        authorization_endpoint: `${server.issuer}/oauth2/auth`,
-        issuer: 'https://someone-else.example',
-        token_endpoint: `${server.issuer}/oauth2/token`,
-      });
+    const discoveryFails = async (flow = build()) => {
       expect(await rejection(begin(flow))).toBe(
         SignetLoginFailureEnum.DISCOVERY_FAILED,
       );
+    };
+
+    it('refuses a document for another issuer, and does not cache the failure', async () => {
+      const flow = build();
+      server.overrideDiscovery({
+        document: {
+          authorization_endpoint: `${server.issuer}/oauth2/auth`,
+          issuer: 'https://someone-else.example',
+          token_endpoint: `${server.issuer}/oauth2/token`,
+        },
+      });
+      await discoveryFails(flow);
       expect(loggedLines()).toContain(
         'reason=discovery_failed detail=issuer_mismatch',
       );
-      server.discovery(null);
+      server.overrideDiscovery(null);
       const { url } = await begin(flow);
       expect(url.startsWith(`${server.issuer}/oauth2/auth?`)).toBe(true);
     });
 
-    it('refuses http endpoints outside development', async () => {
-      expect(
-        await rejection(begin(build({ profile: PRODUCTION_PROFILE }))),
-      ).toBe(SignetLoginFailureEnum.DISCOVERY_FAILED);
+    it('caches a success: one fetch for the life of the flow', async () => {
+      const flow = build();
+      await begin(flow);
+      server.overrideDiscovery({ status: 503 });
+      await begin(flow);
+      expect(server.discoveryRequests()).toBe(1);
+    });
+
+    it('makes one fetch for logins that start together', async () => {
+      const flow = build();
+      await Promise.all([begin(flow), begin(flow), begin(flow)]);
+      expect(server.discoveryRequests()).toBe(1);
+    });
+
+    it('refuses an http authorization endpoint outside development', async () => {
+      await discoveryFails(build({ profile: PRODUCTION_PROFILE }));
       expect(loggedLines()).toContain(
         'detail=authorization_endpoint_not_https',
       );
+    });
+
+    it('refuses an http token endpoint outside development, the authorization endpoint being https', async () => {
+      server.overrideDiscovery({
+        document: {
+          authorization_endpoint: 'https://idp.example/oauth2/auth',
+          issuer: server.issuer,
+          token_endpoint: 'http://idp.example/oauth2/token',
+        },
+      });
+      await discoveryFails(build({ profile: PRODUCTION_PROFILE }));
+      expect(loggedLines()).toContain('detail=token_endpoint_not_https');
+    });
+
+    it.each([
+      [42, 'authorization_endpoint_missing'],
+      ['not a url', 'authorization_endpoint_invalid'],
+    ])(
+      'refuses an authorization_endpoint of %j as %s',
+      async (value, detail) => {
+        server.overrideDiscovery({
+          document: {
+            authorization_endpoint: value,
+            issuer: server.issuer,
+            token_endpoint: `${server.issuer}/oauth2/token`,
+          },
+        });
+        await discoveryFails();
+        expect(loggedLines()).toContain(`detail=${detail} `);
+      },
+    );
+
+    it('names a non-200 status', async () => {
+      server.overrideDiscovery({ status: 503 });
+      await discoveryFails();
+      expect(loggedLines()).toContain('detail=status_503 ');
+    });
+
+    it('names a body that is not JSON', async () => {
+      server.overrideDiscovery({ raw: '<html>' });
+      await discoveryFails();
+      expect(loggedLines()).toContain('detail=body_not_json ');
+    });
+
+    it('names a body that stalls a timeout, not body_not_json', async () => {
+      server.overrideDiscovery({ hang: 'body' });
+      await discoveryFails(build({ discoveryMs: 200 }));
+      expect(loggedLines()).toContain('detail=TimeoutError ');
+    });
+
+    it('names an issuer it cannot reach by the errno, without the URL', async () => {
+      // A port that was just listening and is closed now: refused, not one
+      // of fetch's blocked ports.
+      const closed = createServer();
+      await new Promise<void>((resolve) =>
+        closed.listen(0, '127.0.0.1', resolve),
+      );
+      const { port } = closed.address() as AddressInfo;
+      await new Promise<void>((resolve) => closed.close(() => resolve()));
+      await discoveryFails(
+        build({ env: { ACME_JWT_ISSUER: `http://127.0.0.1:${port}` } }),
+      );
+      const lines = loggedLines();
+      expect(lines).toContain('detail=TypeError:ECONNREFUSED ');
+      expect(lines).not.toContain('http://');
+    });
+
+    it('lets a defect in discovery surface as itself, not as DISCOVERY_FAILED', async () => {
+      const defect = new TypeError('a bug, not the issuer');
+      jest
+        .spyOn(LoginDiscovery.prototype, 'endpoints')
+        .mockRejectedValue(defect);
+      await expect(begin(build())).rejects.toBe(defect);
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it('appends the well-known path to the issuer without doubling a trailing slash', () => {
@@ -594,17 +821,14 @@ describe('SignetLoginFlow', () => {
   });
 
   describe('with the Signet flag off', () => {
-    const disabled = () =>
-      build({
-        env: env({
+    it('reads no login values, and refuses both steps with DISABLED', async () => {
+      const flow = build({
+        env: {
           ACME_LOGIN_CLIENT_ID: undefined,
           ACME_LOGIN_STATE_SECRET: undefined,
           ACME_SIGNET_ENABLED: 'false',
-        }),
+        },
       });
-
-    it('needs no login settings, and refuses both steps with DISABLED', async () => {
-      const flow = disabled();
       expect(await rejection(begin(flow))).toBe(
         SignetLoginFailureEnum.DISABLED,
       );
@@ -620,21 +844,34 @@ describe('SignetLoginFlow', () => {
   });
 
   describe('at construction', () => {
-    it('requires the login variable names in the options', () => {
-      expect(() => build({ options: FIXTURE_OPTIONS })).toThrow(
-        'SignetLoginStrategy acme-login needs options.env.loginClientId and options.env.loginStateSecret',
+    it('requires the login variable names in the options, with the flag off too', () => {
+      for (const flag of ['true', 'false']) {
+        expect(() =>
+          build({
+            env: { ACME_SIGNET_ENABLED: flag },
+            options: FIXTURE_OPTIONS,
+          }),
+        ).toThrow(
+          'SignetLoginStrategy acme-login needs options.env.login ({ clientId, stateSecret })',
+        );
+      }
+    });
+
+    it('requires their values with the flag on', () => {
+      expect(() => build({ env: { ACME_LOGIN_CLIENT_ID: undefined } })).toThrow(
+        'ACME_LOGIN_CLIENT_ID missing',
       );
     });
 
-    it('requires their values', () => {
-      expect(() =>
-        build({ env: env({ ACME_LOGIN_CLIENT_ID: undefined }) }),
-      ).toThrow('ACME_LOGIN_CLIENT_ID missing');
+    it('refuses an empty client id', () => {
+      expect(() => build({ env: { ACME_LOGIN_CLIENT_ID: ' ' } })).toThrow(
+        'ACME_LOGIN_CLIENT_ID must not be empty',
+      );
     });
 
     it('refuses a state secret shorter than 32 bytes, naming its variable', () => {
       expect(() =>
-        build({ env: env({ ACME_LOGIN_STATE_SECRET: 'short' }) }),
+        build({ env: { ACME_LOGIN_STATE_SECRET: 'short' } }),
       ).toThrow(
         'ACME_LOGIN_STATE_SECRET: the login state secret must be at least 32 bytes',
       );
@@ -657,29 +894,20 @@ describe('SignetLoginFlow', () => {
       );
     });
 
-    it('allows http in development on a loopback host only', () => {
-      expect(() =>
+    it.each([
+      ['http://127.0.0.1:4000/cb', true],
+      ['http://[::1]:4000/cb', true],
+      ['http://dev.example/cb', false],
+    ])('in development, allows %s: %s', (uri, allowed) => {
+      const attempt = () =>
         build({
           entry: {
             ...ENTRY,
-            redirectUris: {
-              ...ENTRY.redirectUris,
-              development: 'http://dev.example/cb',
-            },
+            redirectUris: { ...ENTRY.redirectUris, development: uri },
           },
-        }),
-      ).toThrow('must be https, or http on a loopback host');
-      expect(() =>
-        build({
-          entry: {
-            ...ENTRY,
-            redirectUris: {
-              ...ENTRY.redirectUris,
-              development: 'http://127.0.0.1:4000/cb',
-            },
-          },
-        }),
-      ).not.toThrow();
+        });
+      if (allowed) expect(attempt).not.toThrow();
+      else expect(attempt).toThrow('must be https, or http on a loopback host');
     });
 
     it('checks the redirect URI with the flag off too', () => {
@@ -689,9 +917,35 @@ describe('SignetLoginFlow', () => {
             ...ENTRY,
             redirectUris: { ...ENTRY.redirectUris, development: 'not a url' },
           },
-          env: env({ ACME_SIGNET_ENABLED: 'false' }),
+          env: { ACME_SIGNET_ENABLED: 'false' },
         }),
       ).toThrow('redirect URI for development is not a URL');
+    });
+
+    it('wants a redirect URI for every environment the options name, and none they do not, with the flag off too', () => {
+      const { production: _, ...withoutProduction } = ENTRY.redirectUris;
+      expect(() =>
+        build({
+          entry: { ...ENTRY, redirectUris: withoutProduction },
+          env: { ACME_SIGNET_ENABLED: 'false' },
+        }),
+      ).toThrow(
+        'invalid SignetLoginEntry acme-login: no redirect URI for production',
+      );
+      expect(() =>
+        build({
+          entry: {
+            ...ENTRY,
+            redirectUris: {
+              ...ENTRY.redirectUris,
+              prodution: 'https://acme.example/cb',
+            },
+          },
+          env: { ACME_SIGNET_ENABLED: 'false' },
+        }),
+      ).toThrow(
+        'invalid SignetLoginEntry acme-login: redirect URI for an environment the options do not name: prodution',
+      );
     });
   });
 });

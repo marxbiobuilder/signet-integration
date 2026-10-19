@@ -10,10 +10,12 @@ import { type JWTPayload } from 'jose';
 
 import { startTestIssuer } from './signet-token';
 
-// An authorization server for login-flow tests: discovery, a token endpoint
-// that holds the codes it issued to the PKCE, redirect URI and client they
-// were issued for, and the issuer's JWKS. Real HTTP on 127.0.0.1, so the
-// flow's own fetches, timeouts and redirects are what is exercised.
+// An authorization server for login-flow tests: discovery, and a token
+// endpoint that holds each code it issued to the PKCE challenge and redirect
+// URI it was issued for, checks the client against `clientId`, and redeems a
+// code once. The JWKS is served by a separate test issuer (`jwksUri`). Real
+// HTTP on 127.0.0.1, so the flow's own fetches, timeouts and redirects are
+// what is exercised.
 //
 // There is no browser: authorize() plays the IdP's login page. Hand it the
 // URL begin() returned; it checks the request the way Signet would and
@@ -38,24 +40,62 @@ export interface TestGrant {
   readonly subject?: string;
 }
 
+// One member of a script union, with every other member's keys forbidden,
+// so `{ body, status }` is a type error rather than a silent pick.
+type Exclusive<T extends object, K extends PropertyKey> = T & {
+  readonly [P in Exclude<K, keyof T>]?: never;
+};
+
+type TokenScriptKey = 'body' | 'error' | 'hang' | 'location' | 'status';
+
 // The token endpoint's answer while a script is set, whatever the request:
-//   { status, error? }  that status, with an OAuth `error` body when given
-//   { body }            200 with this JSON body (e.g. without access_token)
+//   { status, error? }      that status, with an OAuth `error` body if given
+//   { body }                200 with this JSON body (e.g. no access_token)
+//   { hang: true }          no answer at all, until close()
+//   { hang: 'body' }        200 and its headers, then a body that never ends
+//   { status: 307, location }  a redirect, which the flow must not follow
+export type TokenEndpointScript =
+  | Exclusive<{ readonly body: unknown }, TokenScriptKey>
+  | Exclusive<
+      { readonly error?: string; readonly status: number },
+      TokenScriptKey
+    >
+  | Exclusive<{ readonly hang: 'body' | true }, TokenScriptKey>
+  | Exclusive<
+      { readonly location: string; readonly status: 307 | 308 },
+      TokenScriptKey
+    >;
+
+type DiscoveryScriptKey = 'document' | 'hang' | 'raw' | 'status';
+
+// Discovery's answer while an override is set:
+//   { document }        200 with this document instead of the server's own
+//   { status }          that status, empty body
+//   { raw }             200 with this exact body (e.g. not JSON)
 //   { hang: true }      no answer at all, until close()
 //   { hang: 'body' }    200 and its headers, then a body that never ends
-export type TokenEndpointScript =
-  | { readonly body: unknown }
-  | { readonly error?: string; readonly status: number }
-  | { readonly hang: 'body' | true };
+export type DiscoveryScript =
+  | Exclusive<
+      { readonly document: Record<string, unknown> },
+      DiscoveryScriptKey
+    >
+  | Exclusive<{ readonly status: number }, DiscoveryScriptKey>
+  | Exclusive<{ readonly raw: string }, DiscoveryScriptKey>
+  | Exclusive<{ readonly hang: 'body' | true }, DiscoveryScriptKey>;
 
 export interface TestAuthorizationServer {
   readonly authorize: (authorizationUrl: string, grant?: TestGrant) => string;
   readonly close: () => Promise<void>;
   readonly deny: (authorizationUrl: string, error?: string) => string;
-  // Replaces the discovery document; null restores the server's own.
-  readonly discovery: (document: Record<string, unknown> | null) => void;
+  // How many discovery requests arrived.
+  readonly discoveryRequests: () => number;
   readonly issuer: string;
   readonly jwksUri: string;
+  // Replaces discovery's answer; null restores the server's own document.
+  readonly overrideDiscovery: (script: DiscoveryScript | null) => void;
+  // Back to a fresh server: no scripts, no override, nothing received.
+  // Issued codes are kept; they are single-use anyway.
+  readonly reset: () => void;
   readonly scriptTokenEndpoint: (script: TokenEndpointScript | null) => void;
   // Signs any payload with the issuer's key, for a scripted token endpoint
   // to return a token the flow would not get from a real one.
@@ -78,12 +118,23 @@ export async function startTestAuthorizationServer(
   const codes = new Map<string, IssuedCode>();
   const received: Record<string, string>[] = [];
   let script: TokenEndpointScript | null = null;
-  let discoveryOverride: Record<string, unknown> | null = null;
+  let discoveryScript: DiscoveryScript | null = null;
+  let discoveryCount = 0;
   let issuer = '';
 
+  // Serialised before the head is written, so a body that cannot be
+  // serialised fails before anything was sent.
   const json = (response: ServerResponse, status: number, body: unknown) => {
+    const text = JSON.stringify(body) ?? '';
     response.writeHead(status, { 'content-type': 'application/json' });
-    response.end(JSON.stringify(body));
+    response.end(text);
+  };
+
+  const stall = (response: ServerResponse, hang: 'body' | true) => {
+    if (hang === 'body') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.write('{"partial":');
+    }
   };
 
   const token = async (request: IncomingMessage, response: ServerResponse) => {
@@ -94,13 +145,12 @@ export async function startTestAuthorizationServer(
     );
     received.push(form);
     if (script !== null) {
-      if ('hang' in script) {
-        if (script.hang === 'body') {
-          response.writeHead(200, { 'content-type': 'application/json' });
-          response.write('{"access_token":');
-        }
+      if (script.location !== undefined) {
+        response.writeHead(script.status, { location: script.location });
+        response.end();
         return;
       }
+      if (script.hang !== undefined) return stall(response, script.hang);
       if ('body' in script) return json(response, 200, script.body);
       return json(
         response,
@@ -144,10 +194,23 @@ export async function startTestAuthorizationServer(
       request.method === 'GET' &&
       path === '/.well-known/openid-configuration'
     ) {
+      discoveryCount += 1;
+      const override = discoveryScript;
+      if (override?.hang !== undefined) return stall(response, override.hang);
+      if (override?.raw !== undefined) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(override.raw);
+        return;
+      }
+      if (override?.status !== undefined) {
+        response.writeHead(override.status);
+        response.end();
+        return;
+      }
       return json(
         response,
         200,
-        discoveryOverride ?? {
+        override?.document ?? {
           authorization_endpoint: `${issuer}/oauth2/auth`,
           code_challenge_methods_supported: ['S256'],
           issuer,
@@ -157,7 +220,16 @@ export async function startTestAuthorizationServer(
       );
     }
     if (request.method === 'POST' && path === '/oauth2/token') {
-      token(request, response).catch(() => json(response, 500, {}));
+      // A failure here is the test server's own bug: said out loud, not
+      // folded into a 500 the flow would read as the issuer's.
+      token(request, response).catch((error: unknown) => {
+        console.error(
+          'test authorization server: token endpoint failed',
+          error,
+        );
+        if (response.headersSent) response.destroy();
+        else json(response, 500, {});
+      });
       return;
     }
     json(response, 404, {});
@@ -224,11 +296,18 @@ export async function startTestAuthorizationServer(
       back.searchParams.set('state', request.state);
       return back.toString();
     },
-    discovery: (document) => {
-      discoveryOverride = document;
-    },
+    discoveryRequests: () => discoveryCount,
     issuer,
     jwksUri: keys.keys.url,
+    overrideDiscovery: (next) => {
+      discoveryScript = next;
+    },
+    reset: () => {
+      script = null;
+      discoveryScript = null;
+      discoveryCount = 0;
+      received.length = 0;
+    },
     scriptTokenEndpoint: (next) => {
       script = next;
     },

@@ -115,14 +115,16 @@ consumer with several credential channels and its own dispatcher wants.
 For a web app that signs people in with Signet and then runs on its own
 session: the browser goes through the authorization-code flow, the package
 exchanges the code, verifies the **access token** and runs your resolver --
-the same `SignetPrincipalResolver` contract as above, so one resolver class
-can serve both channels. What you do with the principal (issue a session
-cookie, redirect) is yours.
+the same `SignetPrincipalResolver` contract as above. A class cannot extend
+both strategies, so to share one resolver between the channels, inject a
+resolver service into each strategy and delegate `resolve` to it. What you
+do with the principal (issue a session cookie, redirect) is yours.
 
 ```ts
 export const WEB_LOGIN = {
   name: 'signet-login', // Passport strategy name; one entry per redirect URI
-  redirectUris: {       // verbatim as registered at the IdP; never built from Host
+  redirectUris: {       // verbatim as registered at the IdP; never built from Host;
+                        // one per deployed environment in your options, plus development
     production: 'https://app.example.com/auth/signet/callback',
     staging: 'https://app.staging.example.com/auth/signet/callback',
     development: 'http://localhost:3000/auth/signet/callback',
@@ -130,7 +132,7 @@ export const WEB_LOGIN = {
 } as const satisfies SignetLoginEntry<'production' | 'staging'>;
 
 @Injectable()
-export class WebSignetLogin extends SignetLoginStrategy<User>(WEB_LOGIN) {
+export class WebSignetLogin extends SignetLoginStrategy<User>(WEB_LOGIN) { // name <User>: it is not inferred
   constructor(private readonly users: UsersService) { super(); }
   async resolve(identity: VerifiedSignetIdentity): Promise<PrincipalResolution<User>> {
     const user = await this.users.findByEmail(identity.claims.email as string);
@@ -171,18 +173,26 @@ export class AuthController {
 export class AuthModule {}
 ```
 
-Name two more variables in `options.env`: `loginClientId` (the public
-client's id) and `loginStateSecret` (at least 32 bytes; the state cookie is
-encrypted under it). The strategy checks both at `onModuleInit` when the
-Signet flag is on; with the flag off it needs neither and both steps throw
-`SignetLoginError(DISABLED)`.
+Name the login variables in `options.env.login`: `{ clientId, stateSecret }`
+-- the public client's id, and a secret of 32 random bytes or more (`openssl
+rand -base64 32`) that the state cookie is encrypted under. At `onModuleInit`
+the strategy checks, whatever the Signet flag: that both names are given,
+and that the entry has a redirect URI for each deployed environment and
+development, and none for an environment the options do not name. With the
+flag on it also reads both values (refusing an empty client id or a secret
+under 32 bytes); with the flag off it reads neither, and both steps throw
+`SignetLoginError(DISABLED)`. If your subclass overrides `onModuleInit`, call
+`super.onModuleInit()`; without it the flow is still built, at the first
+login, and these checks move there.
 
 What to know:
 
-- **The callback must NOT be guarded by `SignetPassportGuard`.** It folds
-  every 401 into a bare one and the reason is lost. Use `AuthGuard(entry.name)`
-  with `handleRequest` overridden, as above. A `SignetLoginError` that
-  escapes anyway is a bare 401; `BearerChallengeFilter` adds no
+- **Guard the callback with `AuthGuard(entry.name)`** and override
+  `handleRequest`, as above. `SignetPassportGuard` and `SignetBearerGuard`
+  run the Bearer strategy, not the login one; if one of them is your
+  APP_GUARD, mark both login routes `@Public()` (as above), or the browser
+  gets a Bearer 401 before the login strategy runs. A `SignetLoginError` that
+  escapes `handleRequest` is a bare 401; `BearerChallengeFilter` adds no
   `WWW-Authenticate` to it.
 - Unlike the Bearer strategies, the login strategy's `validate()` throws:
   the callback route has one strategy, and the UI must tell "you cancelled"
@@ -194,17 +204,37 @@ What to know:
   tab) replaces the first's state cookie, so the first tab's callback is
   `STATE_INVALID`. Retrying from the login page is the answer.
 - Every environment's redirect URI is checked when the strategy class is
-  created (https outside `development`), so a production typo fails locally.
+  created (parseable, no fragment or credentials, https outside
+  `development`), and the set of environments at `onModuleInit`, so a
+  missing, extra, malformed or http production URI fails locally. A
+  misspelt host or path still fails only at the IdP.
+- The callback checks the state before it reads the IdP's answer, error
+  responses included: a forged `?error=access_denied` is `STATE_INVALID`,
+  not `CANCELLED`. The state cookie is cleared on every callback with the
+  flag on, on the browser only -- the server keeps no record of used states,
+  and what stops a replayed callback is the IdP's single-use code. Any
+  replica with the same `stateSecret` opens a state another sealed: no
+  sticky sessions needed.
 - The authorization request carries exactly one `resource`, the profile's
   canonical resource, so the token's `aud` is what the verifier expects.
-  Claims your resolver reads must be in the access token: with Signet,
-  `email` is there only for a resource marked `erp: true` in its policy.
+  Claims your resolver reads must be in the access token, and which claims
+  Signet puts there is its policy's business (its resource-server contract:
+  at the time of writing, `email` only for a resource marked `erp: true`).
 - A token without the admission scope (the user unticked it at consent) is
   `ADMISSION_SCOPE_NOT_GRANTED`, not `SignetDecision`'s re-authorise 403.
 - The rejection line is `signet login rejected: metric=signet_login_rejected
   reason=<SignetLoginFailure> detail=… entry=… source=… route=<path>`; no
-  token, code, state or query string. The decision line after a verified
-  identity is `SignetDecision`'s, as on the Bearer channel.
+  token, code, state or raw query (`detail` may carry the IdP's `error`
+  code, sanitised and clipped). `STATE_INVALID`'s detail tells the operator
+  where to look: `cookie_missing` (SameSite, Path, a proxy), `unopenable`
+  (replicas with different secrets, a rotation, tampering), `expired`,
+  `malformed`, `entry`, `state`. Every reason is a `warn`; alert on the
+  reason label (`discovery_failed`, `token_exchange_failed` and
+  `token_rejected` are infrastructure, `cancelled` is a user). The decision
+  line after a verified identity is `SignetDecision`'s, as on the Bearer
+  channel.
+- A defect in the package's own code is not a login failure: it propagates
+  and Nest answers 500.
 
 ### Entry points
 
@@ -218,7 +248,9 @@ What to know:
 Requirements: `ConfigModule` must be global (the strategy, filter and profile
 service inject `ConfigService`); validate the env variables named in `options.env`
 in your own config validation (Joi or otherwise), the package only re-checks the
-clock tolerance and throws on a missing issuer or JWKS URI.
+clock tolerance and throws on a missing issuer or JWKS URI -- and, with a login
+strategy and the flag on, on a missing or empty login client id or a state
+secret under 32 bytes.
 
 Handlers get a typed principal through
 `createSignetPrincipalDecorator(MY_OPTIONS, isMyPrincipal)`; Nest does not check
@@ -234,12 +266,15 @@ vocabulary).
 Testing: `@marxbiotech/signet-integration/testing` exports `startTestIssuer()`
 (a local JWKS endpoint plus a signer that mints tokens in the shape Signet
 issues), `startJwksServer()`, `FIXTURE_OPTIONS` and `FIXTURE_DEVELOPMENT_PROFILE`,
-and for the login flow `startTestAuthorizationServer({ clientId })`: discovery
-and a token endpoint that check PKCE, `redirect_uri` and `client_id`;
-`authorize(url, grant?)` / `deny(url, error?)` play the IdP's login page and
-return the callback URL; `scriptTokenEndpoint()` makes it fail (4xx with an
-OAuth error, 5xx, no `access_token`, no answer); `tokenRequests()` records
-what was sent.
+and for the login flow `startTestAuthorizationServer({ clientId })`: discovery,
+and a token endpoint that checks PKCE, `redirect_uri` and `client_id` and
+redeems each code once; `authorize(url, grant?)` / `deny(url, error?)` play
+the IdP's login page (throwing on a malformed request) and return the
+callback URL; `scriptTokenEndpoint()` makes the token endpoint fail (4xx with
+an OAuth error, 5xx, no `access_token`, a redirect, no answer, a stalled
+body) and `overrideDiscovery()` does the same for discovery or replaces its
+document; `sign()` mints any token with the issuer's key; `tokenRequests()`
+and `discoveryRequests()` record what arrived; `reset()` clears it all.
 
 ## What is deliberately NOT here
 

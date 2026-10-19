@@ -1,37 +1,38 @@
 import {
   BadRequestException,
   Controller,
-  type DynamicModule,
   type ExecutionContext,
   Get,
-  Global,
   type INestApplication,
   Injectable,
   Logger,
-  Module,
   Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
 import { AuthGuard, PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
 import { type Request, type Response } from 'express';
 
+import { FakeConfigModule } from './__spec__/fake-config';
+import {
+  LOGIN_CALLBACK_PATH,
+  LOGIN_CLIENT_ID,
+  LOGIN_ENTRY,
+  LOGIN_OPTIONS,
+  loginEnv,
+} from './__spec__/login-fixture';
 import { BearerChallengeFilter } from './bearer-challenge.filter';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
-import { type SignetLoginEntry } from './login-entry';
 import { SignetLoginError } from './login-error';
 import { SignetLoginStrategy } from './login-strategy';
 import { SignetIntegrationModule } from './module';
-import { type SignetIntegrationOptions } from './options';
 import { type PrincipalResolution } from './principal-resolver';
 import {
   startTestAuthorizationServer,
   type TestAuthorizationServer,
 } from './testing/authorization-server';
-import { FIXTURE_OPTIONS } from './testing/fixture';
 
 // The consumer's wiring, compiled and driven over real HTTP: a subclass of
 // the mixin registered beside forPassport, begin() from a handler, and the
@@ -41,26 +42,8 @@ import { FIXTURE_OPTIONS } from './testing/fixture';
 // that property injection reaches it, and that the reason survives to
 // handleRequest.
 
-const CLIENT_ID = 'acme-web';
-const CALLBACK_PATH = '/auth/signet/callback';
-
-const ENTRY = {
-  name: 'acme-login',
-  redirectUris: {
-    development: `http://localhost:3000${CALLBACK_PATH}`,
-    production: `https://acme.example${CALLBACK_PATH}`,
-    staging: `https://acme.staging.example${CALLBACK_PATH}`,
-  },
-} as const satisfies SignetLoginEntry<'production' | 'staging'>;
-
-const OPTIONS: SignetIntegrationOptions = {
-  ...FIXTURE_OPTIONS,
-  env: {
-    ...FIXTURE_OPTIONS.env,
-    loginClientId: 'ACME_LOGIN_CLIENT_ID',
-    loginStateSecret: 'ACME_LOGIN_STATE_SECRET',
-  },
-};
+const ENTRY = LOGIN_ENTRY;
+const CALLBACK_PATH = LOGIN_CALLBACK_PATH;
 
 interface Principal {
   readonly name: string;
@@ -123,29 +106,6 @@ class AuthController {
   }
 }
 
-@Global()
-@Module({})
-class FakeConfigModule {
-  static forEnv(env: Record<string, string>): DynamicModule {
-    return {
-      exports: [ConfigService],
-      module: FakeConfigModule,
-      providers: [
-        {
-          provide: ConfigService,
-          useValue: {
-            get: (key: string, fallback?: unknown) => env[key] ?? fallback,
-            getOrThrow: (key: string) => {
-              if (env[key] === undefined) throw new Error(`${key} missing`);
-              return env[key];
-            },
-          },
-        },
-      ],
-    };
-  }
-}
-
 describe('SignetLoginStrategy', () => {
   it('refuses an entry name that is not a cookie-safe token, at class creation', () => {
     expect(() => SignetLoginStrategy({ ...ENTRY, name: 'Acme Login' })).toThrow(
@@ -180,6 +140,20 @@ describe('SignetLoginStrategy', () => {
     expect(Incomplete).toBeDefined();
   });
 
+  it('says what is wrong when Nest never injected it', () => {
+    class HandMade extends SignetLoginStrategy<Principal>({
+      ...ENTRY,
+      name: 'hand-made-login',
+    }) {
+      resolve(): Promise<PrincipalResolution<Principal>> {
+        return Promise.resolve({ ok: false, reason: 'unused' });
+      }
+    }
+    expect(() => new HandMade().begin({} as Response)).toThrow(
+      'HandMade: its dependencies were not injected; register it as a provider in a module that imports SignetIntegrationModule.forPassport',
+    );
+  });
+
   describe('wired into a Nest application', () => {
     let server: TestAuthorizationServer;
     let app: INestApplication;
@@ -188,20 +162,15 @@ describe('SignetLoginStrategy', () => {
     beforeAll(async () => {
       jest.spyOn(Logger.prototype, 'log').mockImplementation();
       jest.spyOn(Logger.prototype, 'warn').mockImplementation();
-      server = await startTestAuthorizationServer({ clientId: CLIENT_ID });
+      server = await startTestAuthorizationServer({
+        clientId: LOGIN_CLIENT_ID,
+      });
       const moduleRef = await Test.createTestingModule({
         controllers: [AuthController],
         imports: [
           PassportModule.register({}),
-          FakeConfigModule.forEnv({
-            ACME_JWT_ISSUER: server.issuer,
-            ACME_JWT_JWKS_URI: server.jwksUri,
-            ACME_LOGIN_CLIENT_ID: CLIENT_ID,
-            ACME_LOGIN_STATE_SECRET: 'a-login-state-secret-of-32-bytes!',
-            ACME_SIGNET_ENABLED: 'true',
-            NODE_ENV: 'test',
-          }),
-          SignetIntegrationModule.forPassport({ options: OPTIONS }),
+          FakeConfigModule.forEnv(loginEnv(server)),
+          SignetIntegrationModule.forPassport({ options: LOGIN_OPTIONS }),
         ],
         providers: [
           AcmeLogin,
@@ -216,6 +185,35 @@ describe('SignetLoginStrategy', () => {
     afterAll(async () => {
       await app?.close();
       await server?.close();
+    });
+
+    it('builds the flow even when a subclass overrides onModuleInit without calling super', async () => {
+      @Injectable()
+      class ForgetfulLogin extends SignetLoginStrategy<Principal>({
+        ...ENTRY,
+        name: 'forgetful-login',
+      }) {
+        // A consumer's own init, without super.onModuleInit().
+        override onModuleInit(): void {}
+        resolve(): Promise<PrincipalResolution<Principal>> {
+          return Promise.resolve({ ok: false, reason: 'unused' });
+        }
+      }
+      const moduleRef = await Test.createTestingModule({
+        imports: [
+          PassportModule.register({}),
+          FakeConfigModule.forEnv(loginEnv(server)),
+          SignetIntegrationModule.forPassport({ options: LOGIN_OPTIONS }),
+        ],
+        providers: [ForgetfulLogin],
+      }).compile();
+      await moduleRef.init();
+      const url = await moduleRef.get(ForgetfulLogin).begin({
+        append: () => undefined,
+        req: { ip: '127.0.0.1', path: '/auth/signet' },
+      } as unknown as Response);
+      expect(url.startsWith(`${server.issuer}/oauth2/auth?`)).toBe(true);
+      await moduleRef.close();
     });
 
     // The browser: GET /auth/signet, keep the cookie, let the IdP answer,

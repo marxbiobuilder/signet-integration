@@ -10,6 +10,7 @@ import {
 import { readChannelFlags } from './config';
 import { type DeploymentProfile } from './deployment-profile';
 import { JwtVerifier } from './jwt-verifier';
+import { SignetLoginError, SignetLoginFailureEnum } from './login-error';
 import { type SignetIntegrationOptions } from './options';
 import { FIXTURE_OPTIONS } from './testing/fixture';
 import { startTestIssuer, type TestIssuer } from './testing/signet-token';
@@ -89,6 +90,23 @@ describe('a bare-origin consumer', () => {
         'Bearer realm="bare", error="insufficient_scope", scope="acme:access"',
       malformedCarrier: false,
     });
+  });
+
+  it('answers a SignetLoginError without a challenge, on the resource path too', () => {
+    // Every path is the resource here, so a plain 401 would carry the
+    // metadata challenge; a failed browser login is not a Bearer request.
+    expect(
+      challengeFor(BARE, DEV, ON, new UnauthorizedException(), '/').header,
+    ).not.toBeNull();
+    expect(
+      challengeFor(
+        BARE,
+        DEV,
+        ON,
+        new SignetLoginError(SignetLoginFailureEnum.CANCELLED),
+        '/',
+      ),
+    ).toEqual({ header: null, malformedCarrier: false });
   });
 
   it('has the Bearer channel always on and no legacy channel when the env names are absent', () => {

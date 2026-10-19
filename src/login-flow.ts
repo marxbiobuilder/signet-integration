@@ -2,16 +2,16 @@ import { type Logger } from '@nestjs/common';
 import { type ConfigService } from '@nestjs/config';
 import { type Request, type Response as ExpressResponse } from 'express';
 
-import { readSignetAuthConfig } from './config';
 import { type SignetDeploymentProfileService } from './deployment-profile';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { REFUSAL_ROUTE_MAX, sanitiseLogToken, truncate } from './log-sanitise';
 import {
   LoginDiscovery,
   LoginDiscoveryError,
-  transportFailure,
+  type LoginEndpoints,
 } from './login-discovery';
 import {
+  checkLoginEntryEnvironments,
   type LoginRedirectUri,
   loginRedirectUri,
   type SignetLoginEntry,
@@ -21,6 +21,11 @@ import {
   type SignetLoginFailure,
   SignetLoginFailureEnum,
 } from './login-error';
+import {
+  fetchJson,
+  type JsonResponse,
+  LoginTransportError,
+} from './login-http';
 import {
   codeChallenge,
   LOGIN_STATE_TTL_S,
@@ -60,10 +65,16 @@ interface LoginSettings {
   readonly key: Uint8Array;
 }
 
+// The state a callback answers, or which check failed, for the log line.
+type StateMatch =
+  | { readonly detail: string; readonly ok: false }
+  | { readonly ok: true; readonly state: LoginState };
+
 // The authorization-code + PKCE flow for one entry, as a public client:
 // begin() starts it, complete() turns the IdP's redirect back into a verified
-// identity. What happens to that identity -- admission, the consumer's
-// resolver -- is SignetDecision's, run by the strategy.
+// identity. The admission scope is checked here (see verifiedIdentity());
+// what happens to the identity after that -- the consumer's resolver -- is
+// SignetDecision's, run by the strategy.
 //
 // The identity comes from the ACCESS token, verified by the same
 // SignetBearerVerification the Bearer channel uses: the claims a resolver
@@ -73,7 +84,8 @@ interface LoginSettings {
 // Every refusal throws SignetLoginError through reject(), which writes the
 // one rejection line. Nothing derived from the token, the code or the state
 // is logged, and the route is the path alone: the callback's query carries
-// the code.
+// the code. A defect in this package's own code is not a refusal: it
+// propagates, and Nest answers 500.
 export class SignetLoginFlow {
   private readonly verification: SignetBearerVerification;
   private readonly settings: LoginSettings | null;
@@ -91,45 +103,41 @@ export class SignetLoginFlow {
   ) {
     const { profile } = profiles;
     const development = profile.environment === DEVELOPMENT_ENVIRONMENT;
-    // Checked with the flag off too: the URIs are code, and a typo should
-    // not wait for the day the flag is turned on.
+    // Checked with the flag off too: the entry's environments, its URI and
+    // the login variables' names are code, and a mistake in them should not
+    // wait for the day the flag is turned on.
+    checkLoginEntryEnvironments(entry, Object.keys(options.deployedProfiles));
     this.redirectUri = loginRedirectUri(entry, profile.environment);
     this.cookieName = loginStateCookieName(entry.name);
     this.canonicalResource = profile.canonicalResource;
+    const names = options.env.login;
+    if (names === undefined) {
+      throw new Error(
+        `SignetLoginStrategy ${entry.name} needs options.env.login ({ clientId, stateSecret })`,
+      );
+    }
     this.verification = new SignetBearerVerification(
       configService,
       profiles,
       options,
       logger,
     );
-    const config = readSignetAuthConfig(options, configService, profile);
-    if (!config.signetEnabled) {
+    const { enabled, issuer } = this.verification;
+    if (!enabled || issuer === null) {
       this.settings = null;
       return;
     }
-    const { loginClientId, loginStateSecret } = options.env;
-    if (loginClientId === undefined || loginStateSecret === undefined) {
-      throw new Error(
-        `SignetLoginStrategy ${entry.name} needs options.env.loginClientId and options.env.loginStateSecret`,
-      );
-    }
-    const clientId = configService.getOrThrow<string>(loginClientId);
-    let key: Uint8Array;
-    try {
-      key = loginStateKey(configService.getOrThrow<string>(loginStateSecret));
-    } catch (error) {
-      throw new Error(
-        `${loginStateSecret}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    const clientId = configService.getOrThrow<string>(names.clientId);
+    if (clientId.trim() === '') {
+      throw new Error(`${names.clientId} must not be empty`);
     }
     this.settings = {
       clientId,
-      discovery: new LoginDiscovery(
-        config.jwt.issuer,
-        !development,
-        timeouts.discoveryMs,
+      discovery: new LoginDiscovery(issuer, !development, timeouts.discoveryMs),
+      key: loginStateKey(
+        configService.getOrThrow<string>(names.stateSecret),
+        names.stateSecret,
       ),
-      key,
     };
   }
 
@@ -172,15 +180,33 @@ export class SignetLoginFlow {
     return url.toString();
   }
 
-  // The callback: the IdP's answer, checked against the state cookie, the
-  // code exchanged, the token verified.
+  // The callback: the state checked, the IdP's answer read, the code
+  // exchanged, the token verified.
   async complete(request: Request): Promise<VerifiedSignetIdentity> {
     const settings = this.enabled(request);
-    // Read, then cleared before anything else can fail: a state is good
-    // for one callback, whatever that callback's outcome.
+    // Read, then cleared on the browser before any later check can fail
+    // (only the enabled check runs first), so a browser never presents a
+    // state twice. The server keeps no record of used states: a sealed
+    // value opens until it expires, and what stops a replayed callback is
+    // the IdP's single-use code.
     const sealed = readCookie(request.headers.cookie, this.cookieName);
     this.clearStateCookie(request);
 
+    // The state before the IdP's answer, error responses included (RFC 6749
+    // §4.1.2.1 has them carry it): an unchecked `error` would let any page
+    // end a login in flight and have the UI say "you cancelled".
+    const match = await this.matchState(
+      settings,
+      sealed,
+      queryValue(request, 'state'),
+    );
+    if (!match.ok) {
+      throw this.reject(
+        request,
+        SignetLoginFailureEnum.STATE_INVALID,
+        match.detail,
+      );
+    }
     const error = queryValue(request, 'error');
     if (error !== undefined) {
       throw this.reject(
@@ -190,14 +216,6 @@ export class SignetLoginFlow {
           : SignetLoginFailureEnum.IDP_ERROR,
         error,
       );
-    }
-    const state = await this.matchState(
-      settings,
-      sealed,
-      queryValue(request, 'state'),
-    );
-    if (typeof state === 'string') {
-      throw this.reject(request, SignetLoginFailureEnum.STATE_INVALID, state);
     }
     const code = queryValue(request, 'code');
     if (code === undefined || code === '') {
@@ -214,8 +232,18 @@ export class SignetLoginFlow {
       request,
       tokenEndpoint,
       code,
-      state.verifier,
+      match.state.verifier,
     );
+    return this.verifiedIdentity(settings, request, accessToken);
+  }
+
+  // The access token verified, then two checks the Bearer channel does not
+  // make.
+  private async verifiedIdentity(
+    settings: LoginSettings,
+    request: Request,
+    accessToken: string,
+  ): Promise<VerifiedSignetIdentity> {
     const result = await this.verification.verifyToken(accessToken);
     if (!result.ok) {
       throw this.reject(
@@ -256,38 +284,48 @@ export class SignetLoginFlow {
   private async endpoints(
     settings: LoginSettings,
     request: Request | undefined,
-  ) {
+  ): Promise<LoginEndpoints> {
     try {
       return await settings.discovery.endpoints();
     } catch (error) {
+      // Every failure of the issuer's is a LoginDiscoveryError; anything
+      // else is a defect here and must surface as a 500, not a 401.
+      if (!(error instanceof LoginDiscoveryError)) throw error;
       throw this.reject(
         request,
         SignetLoginFailureEnum.DISCOVERY_FAILED,
-        error instanceof LoginDiscoveryError
-          ? error.detail
-          : transportFailure(error),
+        error.detail,
       );
     }
   }
 
-  // The state this callback answers, or which check failed (for the log
-  // line): no cookie this process sealed in the last ten minutes, none for
-  // this entry, none whose state is the query's. A stale cookie on a wider
-  // path can arrive beside the current one, so every value is tried.
+  // Which check failed, distinctly, because each sends the operator
+  // somewhere else (login-state.ts): no cookie at all (SameSite, Path, a
+  // proxy), one that would not open (unopenable / expired / malformed),
+  // none for this entry, none whose state is the query's. A stale cookie on
+  // a wider path can arrive beside the current one, so every value is tried.
   private async matchState(
     settings: LoginSettings,
     sealed: readonly string[],
     queryState: string | undefined,
-  ): Promise<LoginState | 'cookie' | 'entry' | 'state'> {
+  ): Promise<StateMatch> {
+    if (sealed.length === 0) return { detail: 'cookie_missing', ok: false };
     const opened: LoginState[] = [];
+    let firstFailure: string | undefined;
     for (const value of sealed) {
-      const state = await openLoginState(settings.key, value);
-      if (state !== null) opened.push(state);
+      const opening = await openLoginState(settings.key, value);
+      if (opening.ok) opened.push(opening.state);
+      else firstFailure ??= opening.reason;
     }
-    if (opened.length === 0) return 'cookie';
+    if (opened.length === 0) {
+      return { detail: firstFailure ?? 'unopenable', ok: false };
+    }
     const forEntry = opened.filter(({ entry }) => entry === this.entry.name);
-    if (forEntry.length === 0) return 'entry';
-    return forEntry.find(({ state }) => state === queryState) ?? 'state';
+    if (forEntry.length === 0) return { detail: 'entry', ok: false };
+    const state = forEntry.find((s) => s.state === queryState);
+    return state === undefined
+      ? { detail: 'state', ok: false }
+      : { ok: true, state };
   }
 
   private clearStateCookie(request: Request): void {
@@ -315,37 +353,27 @@ export class SignetLoginFlow {
         SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
         detail,
       );
-    let response: Response;
-    let body: unknown;
+    let response: JsonResponse;
     try {
-      response = await fetch(tokenEndpoint, {
-        body: new URLSearchParams({
-          client_id: settings.clientId,
-          code,
-          code_verifier: verifier,
-          grant_type: 'authorization_code',
-          redirect_uri: this.redirectUri.value,
-        }),
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/x-www-form-urlencoded',
+      response = await fetchJson(
+        tokenEndpoint,
+        {
+          body: new URLSearchParams({
+            client_id: settings.clientId,
+            code,
+            code_verifier: verifier,
+            grant_type: 'authorization_code',
+            redirect_uri: this.redirectUri.value,
+          }),
+          method: 'POST',
         },
-        method: 'POST',
-        redirect: 'error',
-        signal: AbortSignal.timeout(this.timeouts.tokenMs),
-      });
-      // Read as text inside the try: the timeout covers the body too, and a
-      // body that stalls is a transport failure, not a missing token.
-      const text = await response.text();
-      try {
-        body = JSON.parse(text) as unknown;
-      } catch {
-        body = undefined;
-      }
+        this.timeouts.tokenMs,
+      );
     } catch (error) {
-      throw fail(transportFailure(error));
+      if (!(error instanceof LoginTransportError)) throw error;
+      throw fail(error.detail);
     }
-    const fields = (body ?? {}) as Record<string, unknown>;
+    const fields = (response.body ?? {}) as Record<string, unknown>;
     if (!response.ok) {
       // The status and the OAuth `error` code only: the body can echo the
       // code or carry a description written for humans.
@@ -353,6 +381,7 @@ export class SignetLoginFlow {
         typeof fields.error === 'string' ? fields.error : 'none';
       throw fail(`status_${response.status}:${oauthError}`);
     }
+    if (!response.json) throw fail('body_not_json');
     if (typeof fields.access_token !== 'string' || fields.access_token === '') {
       throw fail('access_token_missing');
     }

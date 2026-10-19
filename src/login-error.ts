@@ -9,9 +9,12 @@ import { UnauthorizedException } from '@nestjs/common';
 //   CANCELLED                    the user declined at the IdP (access_denied)
 //   IDP_ERROR                    the IdP answered with any other error, or
 //                                with neither a code nor an error
-//   STATE_INVALID                no state cookie, one this process cannot
-//                                open, expired, for another entry, or a state
-//                                that does not match the query's
+//                                (both only once the state checked out)
+//   STATE_INVALID                no state cookie, one not sealed under this
+//                                stateSecret, expired, for another
+//                                entry, or a state that does not match the
+//                                query's -- checked before the IdP's answer
+//                                is read, error responses included
 //   DISCOVERY_FAILED             the issuer's metadata could not be fetched
 //                                or did not pass its checks
 //   TOKEN_EXCHANGE_FAILED        the token endpoint refused, failed or did
@@ -23,7 +26,8 @@ import { UnauthorizedException } from '@nestjs/common';
 //                                the client's policy does not allow it
 //
 // What happens after a verified identity -- the resolver's refusal, a store
-// outage, a resolver bug -- is SignetDecision's, with its own exceptions.
+// outage, a resolver bug -- is SignetDecision's, with its own exceptions. A
+// defect in this package's own code is neither: it propagates as a 500.
 export const SignetLoginFailureEnum = {
   ADMISSION_SCOPE_NOT_GRANTED: 'admission_scope_not_granted',
   CANCELLED: 'cancelled',

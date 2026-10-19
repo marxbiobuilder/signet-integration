@@ -1,5 +1,6 @@
 import { type ConfigService } from '@nestjs/config';
 
+import { configOf } from './__spec__/fake-config';
 import {
   bearerChallenge,
   insufficientScopeChallenge,
@@ -46,14 +47,14 @@ const OTHER: SignetIntegrationOptions<'live' | 'test'> = {
   scopesSupported: ['other:enter'],
 };
 
+// The shared fake, its two methods wrapped in spies: these cases assert
+// which variable NAMES were read.
 function fakeConfig(env: Record<string, string>) {
-  const get = jest.fn(
-    (key: string, fallback?: unknown) => env[key] ?? fallback,
+  const base = configOf(env);
+  const get = jest.fn((key: string, fallback?: unknown): unknown =>
+    base.get(key, fallback),
   );
-  const getOrThrow = jest.fn((key: string) => {
-    if (env[key] === undefined) throw new Error(`${key} missing`);
-    return env[key];
-  });
+  const getOrThrow = jest.fn((key: string): unknown => base.getOrThrow(key));
   return {
     get,
     getOrThrow,

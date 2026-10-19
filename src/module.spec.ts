@@ -1,8 +1,6 @@
 import {
   Controller,
-  type DynamicModule,
   Get,
-  Global,
   type INestApplication,
   Inject,
   Injectable,
@@ -10,12 +8,12 @@ import {
   Module,
   Req,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
 import { type Request } from 'express';
 
+import { FakeConfigModule } from './__spec__/fake-config';
 import { BearerChallengeFilter } from './bearer-challenge.filter';
 import { SignetBearerGuard } from './guard';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
@@ -111,32 +109,6 @@ class ProbeController {
     principal: unknown;
   } {
     return { principal: request.principal, user: request.user };
-  }
-}
-
-// A consumer's ConfigModule is global; the package's providers inject
-// ConfigService from inside SignetIntegrationModule's own scope, which a
-// plain provider on the test root would not reach.
-@Global()
-@Module({})
-class FakeConfigModule {
-  static forEnv(env: Record<string, string>): DynamicModule {
-    return {
-      exports: [ConfigService],
-      module: FakeConfigModule,
-      providers: [
-        {
-          provide: ConfigService,
-          useValue: {
-            get: (key: string, fallback?: unknown) => env[key] ?? fallback,
-            getOrThrow: (key: string) => {
-              if (env[key] === undefined) throw new Error(`${key} missing`);
-              return env[key];
-            },
-          },
-        },
-      ],
-    };
   }
 }
 

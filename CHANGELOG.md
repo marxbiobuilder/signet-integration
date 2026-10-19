@@ -23,21 +23,36 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `SignetLoginStrategy<P>(entry)`：每個 `SignetLoginEntry`（一條 redirect
     URI／環境）一個 Passport strategy 的 mixin；subclass 實作 `resolve()`，跟
     Bearer 通道同一份 `SignetPrincipalResolver` 契約。`begin(res)` 寫 state
-    cookie 並回傳 authorization URL；callback 的 `validate()` 驗 state、換
-    code、驗 access token，再交給 `SignetDecision`。
+    cookie 並回傳 authorization URL；callback 的 `validate()` 先驗 state（IdP
+    的錯誤回應也一樣）、再換 code、驗 access token，最後交給
+    `SignetDecision`。`P` 要明確寫出，無法推斷。
   - `SignetLoginError`／`SignetLoginFailureEnum`：login 路徑失敗一律 throw 並
     帶 reason（與 Bearer 的「回 false、統一 401」不同），由 app 在
     `AuthGuard(entry.name).handleRequest` 對應成 UI。缺 admission scope 是
-    `ADMISSION_SCOPE_NOT_GRANTED`。
-  - state cookie 以 `loginStateSecret` 經 HKDF 衍生的金鑰加密（JWE `dir` +
-    A256GCM），HttpOnly、SameSite=Lax、Path＝redirect URI 的 path，callback
-    時一律清除。
+    `ADMISSION_SCOPE_NOT_GRANTED`。套件自身的程式缺陷不包成
+    `SignetLoginError`，照常成為 500。
+  - state cookie 以 `stateSecret` 經 HKDF 衍生的金鑰加密（JWE `dir` +
+    A256GCM），HttpOnly、SameSite=Lax、Path＝redirect URI 的 path、Max-Age
+    600 秒，redirect URI 是 https 時加 Secure。旗標開啟時每次 callback 都在
+    瀏覽器端清除；伺服器不記錄用過的 state，重放由 IdP 的一次性 code 擋下。
+    `STATE_INVALID` 的 log detail 區分 `cookie_missing`／`unopenable`／
+    `expired`／`malformed`／`entry`／`state`。
   - 授權請求只帶一個 `resource`（canonical resource）；discovery 的 `issuer`
-    必須逐字相同，deployed 環境 endpoint 必須是 https；token 的 `client_id`
-    必須是 login client。
-  - `SignetEnvNames.loginClientId`／`loginStateSecret`（optional，只有登錄了
-    login strategy 且 Signet 旗標開啟時才讀）。
-  - testing：`startTestAuthorizationServer({ clientId })`。
+    必須逐字相同，deployed 環境兩個 endpoint 都必須是 https；token 的
+    `client_id` 必須是 login client。discovery 與 token endpoint 都不跟隨
+    redirect，逾時各 5 秒且涵蓋讀取 body。
+  - `SignetEnvNames.login`（optional，`{ clientId, stateSecret }`）：登錄了
+    login strategy 時，名稱在 `onModuleInit` 檢查（不論旗標）；值只在 Signet
+    旗標開啟時讀，拒絕空的 client id 與不足 32 bytes 的 secret。
+  - entry 在建立 class 時驗證並凍結成副本（名稱、scope token、每個環境的
+    redirect URI）；`onModuleInit` 時再對照 options 的 deployed 環境，缺少或
+    多出都會失敗。subclass 覆寫 `onModuleInit` 而沒呼叫 super 時，flow 會在
+    第一次登入時建立。
+  - `SignetBearerVerification.issuer`：設定的 issuer（旗標關閉時為 `null`），
+    login flow 的 discovery 用它，設定只讀一次。
+  - testing：`startTestAuthorizationServer({ clientId })`，含
+    `overrideDiscovery()`、`scriptTokenEndpoint()`（含 redirect 與 body 卡住）、
+    `sign()`、`discoveryRequests()`、`reset()`。
 
 ### Changed
 
