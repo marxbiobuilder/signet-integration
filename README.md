@@ -190,6 +190,11 @@ What to know:
 - `begin()` must be reached on the same host as the redirect URI: the state
   cookie is host-only and scoped to the redirect URI's path. A front end on
   another host proxies `/auth/*` to the API.
+- One login in flight per entry and browser: a second `begin()` (another
+  tab) replaces the first's state cookie, so the first tab's callback is
+  `STATE_INVALID`. Retrying from the login page is the answer.
+- Every environment's redirect URI is checked when the strategy class is
+  created (https outside `development`), so a production typo fails locally.
 - The authorization request carries exactly one `resource`, the profile's
   canonical resource, so the token's `aud` is what the verifier expects.
   Claims your resolver reads must be in the access token: with Signet,

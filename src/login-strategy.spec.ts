@@ -156,6 +156,21 @@ describe('SignetLoginStrategy', () => {
     );
   });
 
+  it('checks every environment’s redirect URI at class creation, not only the running one’s', () => {
+    expect(() =>
+      SignetLoginStrategy({
+        ...ENTRY,
+        name: 'typo-login',
+        redirectUris: {
+          ...ENTRY.redirectUris,
+          production: 'http://acme.example/auth/signet/callback',
+        },
+      }),
+    ).toThrow(
+      'invalid SignetLoginEntry typo-login: redirect URI for production must be https',
+    );
+  });
+
   it('leaves resolve abstract', () => {
     // @ts-expect-error -- a subclass without resolve does not compile
     class Incomplete extends SignetLoginStrategy<Principal>({

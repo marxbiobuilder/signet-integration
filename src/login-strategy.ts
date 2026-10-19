@@ -7,7 +7,7 @@ import { Strategy } from 'passport-custom';
 import { SignetDecision } from './decision';
 import { SignetDeploymentProfileService } from './deployment-profile';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
-import { type SignetLoginEntry, validateLoginEntryName } from './login-entry';
+import { type SignetLoginEntry, validateLoginEntry } from './login-entry';
 import { SignetLoginFlow } from './login-flow';
 import {
   SIGNET_INTEGRATION_OPTIONS,
@@ -64,7 +64,7 @@ export declare abstract class SignetLoginStrategyBase<P>
 export function SignetLoginStrategy<P>(
   entry: SignetLoginEntry,
 ): typeof SignetLoginStrategyBase<P> {
-  validateLoginEntryName(entry.name);
+  validateLoginEntry(entry);
 
   @Injectable()
   abstract class SignetLogin

@@ -473,6 +473,20 @@ describe('SignetLoginFlow', () => {
         expect(loggedLines()).toContain('detail=TimeoutError');
       });
 
+      it('gives up on a body that stalls after the headers, as a transport failure', async () => {
+        expect(await exchangeFails({ hang: 'body' }, 200)).toBe(
+          SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
+        );
+        expect(loggedLines()).toContain('detail=TimeoutError');
+      });
+
+      it('treats a 200 whose body is not JSON as a missing token', async () => {
+        expect(await exchangeFails({ body: undefined })).toBe(
+          SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
+        );
+        expect(loggedLines()).toContain('detail=access_token_missing');
+      });
+
       it('refuses a code the server already redeemed', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);

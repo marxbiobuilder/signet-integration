@@ -1,4 +1,4 @@
-import { type DEVELOPMENT_ENVIRONMENT } from './options';
+import { DEVELOPMENT_ENVIRONMENT } from './options';
 import { SIGNET_JWT_STRATEGY } from './strategy';
 
 // One way into the login flow: one redirect URI per environment, registered
@@ -30,8 +30,11 @@ const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   '[::1]',
 ]);
 
-// Checked when the strategy class is created, so a bad name fails at import.
-export function validateLoginEntryName(name: string): void {
+// Checked when the strategy class is created, env-free: the name, and every
+// environment's redirect URI -- so a typo in production's fails on a
+// developer's machine, not on the day of the deploy.
+export function validateLoginEntry(entry: SignetLoginEntry): void {
+  const { name } = entry;
   if (!ENTRY_NAME.test(name)) {
     throw new Error(
       `invalid SignetLoginEntry: name ${JSON.stringify(name)} must be lowercase letters, digits and hyphens, starting with a letter`,
@@ -41,6 +44,9 @@ export function validateLoginEntryName(name: string): void {
     throw new Error(
       `invalid SignetLoginEntry: name ${name} is the Bearer strategy's`,
     );
+  }
+  for (const [environment, raw] of Object.entries(entry.redirectUris)) {
+    checkRedirectUri(name, environment, raw);
   }
 }
 
@@ -52,19 +58,31 @@ export interface LoginRedirectUri {
   readonly value: string;
 }
 
-// The redirect URI this process uses, checked against its environment.
+// The redirect URI this process uses.
 export function loginRedirectUri(
   entry: SignetLoginEntry,
   environment: string,
-  development: boolean,
 ): LoginRedirectUri {
-  const fail = (reason: string): never => {
-    throw new Error(`invalid SignetLoginEntry ${entry.name}: ${reason}`);
-  };
   const raw: string | undefined = entry.redirectUris[environment];
   if (raw === undefined) {
-    return fail(`no redirect URI for environment ${environment}`);
+    throw new Error(
+      `invalid SignetLoginEntry ${entry.name}: no redirect URI for environment ${environment}`,
+    );
   }
+  return checkRedirectUri(entry.name, environment, raw);
+}
+
+// Every environment but development is deployed (the options validation
+// refuses a deployed environment by that name), so its URI must be https.
+function checkRedirectUri(
+  name: string,
+  environment: string,
+  raw: string,
+): LoginRedirectUri {
+  const fail = (reason: string): never => {
+    throw new Error(`invalid SignetLoginEntry ${name}: ${reason}`);
+  };
+  const development = environment === DEVELOPMENT_ENVIRONMENT;
   let url: URL;
   try {
     url = new URL(raw);

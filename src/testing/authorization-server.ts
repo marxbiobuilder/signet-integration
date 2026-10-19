@@ -42,10 +42,11 @@ export interface TestGrant {
 //   { status, error? }  that status, with an OAuth `error` body when given
 //   { body }            200 with this JSON body (e.g. without access_token)
 //   { hang: true }      no answer at all, until close()
+//   { hang: 'body' }    200 and its headers, then a body that never ends
 export type TokenEndpointScript =
   | { readonly body: unknown }
   | { readonly error?: string; readonly status: number }
-  | { readonly hang: true };
+  | { readonly hang: 'body' | true };
 
 export interface TestAuthorizationServer {
   readonly authorize: (authorizationUrl: string, grant?: TestGrant) => string;
@@ -93,7 +94,13 @@ export async function startTestAuthorizationServer(
     );
     received.push(form);
     if (script !== null) {
-      if ('hang' in script) return;
+      if ('hang' in script) {
+        if (script.hang === 'body') {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.write('{"access_token":');
+        }
+        return;
+      }
       if ('body' in script) return json(response, 200, script.body);
       return json(
         response,

@@ -93,11 +93,7 @@ export class SignetLoginFlow {
     const development = profile.environment === DEVELOPMENT_ENVIRONMENT;
     // Checked with the flag off too: the URIs are code, and a typo should
     // not wait for the day the flag is turned on.
-    this.redirectUri = loginRedirectUri(
-      entry,
-      profile.environment,
-      development,
-    );
+    this.redirectUri = loginRedirectUri(entry, profile.environment);
     this.cookieName = loginStateCookieName(entry.name);
     this.canonicalResource = profile.canonicalResource;
     this.verification = new SignetBearerVerification(
@@ -338,7 +334,14 @@ export class SignetLoginFlow {
         redirect: 'error',
         signal: AbortSignal.timeout(this.timeouts.tokenMs),
       });
-      body = await response.json().catch(() => undefined);
+      // Read as text inside the try: the timeout covers the body too, and a
+      // body that stalls is a transport failure, not a missing token.
+      const text = await response.text();
+      try {
+        body = JSON.parse(text) as unknown;
+      } catch {
+        body = undefined;
+      }
     } catch (error) {
       throw fail(transportFailure(error));
     }
