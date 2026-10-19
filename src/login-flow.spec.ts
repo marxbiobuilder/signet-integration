@@ -540,6 +540,59 @@ describe('SignetLoginFlow', () => {
           expect(identity.subject).toBe('test-user');
         },
       );
+      it.each([
+        ['after', (bad: string, current: string) => `${bad}; ${current}`],
+        ['before', (bad: string, current: string) => `${current}; ${bad}`],
+      ])(
+        'tries every value: an unopenable cookie of the same name sent %s the current one does not end the login',
+        async (_, order) => {
+          const leftover = build({
+            env: {
+              ACME_LOGIN_STATE_SECRET: 'the-secret-before-a-rotation-32b!',
+            },
+          });
+          const bad = (await begin(leftover)).cookie;
+          const flow = build();
+          const { cookie, url } = await begin(flow);
+          const identity = await flow.complete(
+            callback(server.authorize(url), order(bad, cookie)).request,
+          );
+          expect(identity.subject).toBe('test-user');
+        },
+      );
+
+      it.each([
+        ['expired first', true, 'expired'],
+        ['unopenable first', false, 'unopenable'],
+      ])(
+        'names the first failure when no value opens (%s)',
+        async (_, expiredFirst, detail) => {
+          const expired = await new EncryptJWT({
+            entry: 'acme-login',
+            state: 's',
+            verifier: 'v',
+          })
+            .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
+            .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
+            .encrypt(loginStateKey(SECRET, 'spec'));
+          const values = [
+            `signet_login.acme-login=${expired}`,
+            'signet_login.acme-login=garbage',
+          ];
+          if (!expiredFirst) values.reverse();
+          expect(
+            await rejection(
+              build().complete(
+                callback(
+                  `http://localhost:3000${CALLBACK_PATH}?code=c&state=s`,
+                  values.join('; '),
+                ).request,
+              ),
+            ),
+          ).toBe(SignetLoginFailureEnum.STATE_INVALID);
+          expect(loggedLines()).toContain(`detail=${detail} `);
+        },
+      );
     });
 
     describe('token exchange', () => {
@@ -563,7 +616,7 @@ describe('SignetLoginFlow', () => {
         );
       });
 
-      it('answers TOKEN_EXCHANGE_FAILED for a 5xx without a body', async () => {
+      it('answers TOKEN_EXCHANGE_FAILED for a 5xx without an OAuth error', async () => {
         expect(await exchangeFails({ status: 503 })).toBe(
           SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
         );
@@ -576,6 +629,23 @@ describe('SignetLoginFlow', () => {
         );
         expect(loggedLines()).toContain('detail=access_token_missing');
       });
+
+      it('names a proxy’s HTML 502 by its status, no OAuth error', async () => {
+        expect(
+          await exchangeFails({ raw: '<html>bad gateway</html>', status: 502 }),
+        ).toBe(SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED);
+        expect(loggedLines()).toContain('detail=status_502:none ');
+      });
+
+      it.each([null, [], 'a string', 42])(
+        'treats a 200 whose JSON body is %j, not an object, as a missing token -- a 401, not a crash',
+        async (body) => {
+          expect(await exchangeFails({ body })).toBe(
+            SignetLoginFailureEnum.TOKEN_EXCHANGE_FAILED,
+          );
+          expect(loggedLines()).toContain('detail=access_token_missing ');
+        },
+      );
 
       it('names a 200 whose body is not JSON body_not_json', async () => {
         expect(await exchangeFails({ body: undefined })).toBe(
@@ -776,6 +846,12 @@ describe('SignetLoginFlow', () => {
       server.overrideDiscovery({ raw: '<html>' });
       await discoveryFails();
       expect(loggedLines()).toContain('detail=body_not_json ');
+    });
+
+    it('refuses a JSON body that is not a document -- a 401, not a crash', async () => {
+      server.overrideDiscovery({ raw: 'null' });
+      await discoveryFails();
+      expect(loggedLines()).toContain('detail=issuer_mismatch ');
     });
 
     it('names a body that stalls a timeout, not body_not_json', async () => {

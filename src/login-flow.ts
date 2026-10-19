@@ -78,7 +78,7 @@ type StateMatch =
 //
 // The identity comes from the ACCESS token, verified by the same
 // SignetBearerVerification the Bearer channel uses: the claims a resolver
-// reads are the resource-server contract's either way. No ID token, no
+// reads are the same access-token claims either way. No ID token, no
 // nonce, no refresh token is kept.
 //
 // Every refusal throws SignetLoginError through reject(), which writes the

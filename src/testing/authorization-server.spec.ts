@@ -2,6 +2,7 @@ import { codeChallenge } from '../login-state';
 import {
   startTestAuthorizationServer,
   type TestAuthorizationServer,
+  type TokenEndpointScript,
 } from './authorization-server';
 
 // The login specs' oracle checks the flow; this checks the oracle. Each
@@ -135,6 +136,63 @@ describe('startTestAuthorizationServer', () => {
       iss: server.issuer,
       scp: ['openid', 'acme:access'],
       sub: 'person-1',
+    });
+  });
+
+  describe('scripted token endpoint', () => {
+    const post = () =>
+      fetch(`${server.issuer}/oauth2/token`, {
+        body: new URLSearchParams({ grant_type: 'authorization_code' }),
+        method: 'POST',
+      });
+
+    it('answers a status script with that status even when body is spelled out as undefined', async () => {
+      server.scriptTokenEndpoint({ body: undefined, status: 500 });
+      expect((await post()).status).toBe(500);
+    });
+
+    it('still answers { body: undefined } with a 200 whose body is not JSON', async () => {
+      server.scriptTokenEndpoint({ body: undefined });
+      const response = await post();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('');
+    });
+
+    it('answers a raw script with that status and that exact body', async () => {
+      server.scriptTokenEndpoint({
+        raw: '<html>bad gateway</html>',
+        status: 502,
+      });
+      const response = await post();
+      expect(response.status).toBe(502);
+      expect(await response.text()).toBe('<html>bad gateway</html>');
+    });
+
+    it('refuses, at compile time, a script mixing two members', () => {
+      // @ts-expect-error -- body and status belong to different members
+      const mixed: TokenEndpointScript = { body: {}, status: 500 };
+      expect(mixed).toBeDefined();
+    });
+
+    it('drops the connection on its own failure, records it, and forgets it on reset()', async () => {
+      // A body JSON cannot serialise: the server's bug, not the issuer's.
+      server.scriptTokenEndpoint({ body: 10n });
+      await expect(post()).rejects.toThrow();
+      expect(server.failures()).toHaveLength(1);
+      expect(server.failures()[0]).toBeInstanceOf(TypeError);
+      server.reset();
+      expect(server.failures()).toEqual([]);
+    });
+
+    it('rejects close() while a failure is unacknowledged', async () => {
+      const other = await startTestAuthorizationServer({ clientId: CLIENT });
+      other.scriptTokenEndpoint({ body: 10n });
+      await fetch(`${other.issuer}/oauth2/token`, { method: 'POST' }).catch(
+        () => undefined,
+      );
+      await expect(other.close()).rejects.toThrow(
+        'test authorization server: 1 request(s) failed inside the server; see failures()',
+      );
     });
   });
 

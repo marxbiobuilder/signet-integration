@@ -218,8 +218,15 @@ What to know:
 - The authorization request carries exactly one `resource`, the profile's
   canonical resource, so the token's `aud` is what the verifier expects.
   Claims your resolver reads must be in the access token, and which claims
-  Signet puts there is its policy's business (its resource-server contract:
-  at the time of writing, `email` only for a resource marked `erp: true`).
+  Signet puts there is its policy's business, documented in Signet's
+  resource-server contract (`docs/resource-server-contract.md` in
+  marxbiotech/signet-marxbio-tech) -- `email`, for one, only for a resource
+  marked `erp: true`.
+- The issuer's discovery document is fetched on the first login and kept
+  until the process restarts. Signet announces a change of its issuer or
+  JWKS address in advance (same contract); if its authorization or token
+  endpoint ever moves, logins fail with `discovery_failed` or
+  `token_exchange_failed` (`status_404`) until a restart.
 - A token without the admission scope (the user unticked it at consent) is
   `ADMISSION_SCOPE_NOT_GRANTED`, not `SignetDecision`'s re-authorise 403.
 - The rejection line is `signet login rejected: metric=signet_login_rejected
@@ -270,11 +277,18 @@ and for the login flow `startTestAuthorizationServer({ clientId })`: discovery,
 and a token endpoint that checks PKCE, `redirect_uri` and `client_id` and
 redeems each code once; `authorize(url, grant?)` / `deny(url, error?)` play
 the IdP's login page (throwing on a malformed request) and return the
-callback URL; `scriptTokenEndpoint()` makes the token endpoint fail (4xx with
-an OAuth error, 5xx, no `access_token`, a redirect, no answer, a stalled
-body) and `overrideDiscovery()` does the same for discovery or replaces its
-document; `sign()` mints any token with the issuer's key; `tokenRequests()`
-and `discoveryRequests()` record what arrived; `reset()` clears it all.
+callback URL; `scriptTokenEndpoint()` makes the token endpoint fail (a status
+with or without an OAuth error, a raw body such as a proxy's HTML, no
+`access_token`, a redirect, no answer, a stalled body) and
+`overrideDiscovery()` makes discovery fail (a status, a raw body, no answer,
+a stalled body) or replaces its document -- one script shape at a time, the
+union rejects mixtures; `sign()` signs any payload with the issuer's key
+(`exp` 5 min); `tokenRequests()` and `discoveryRequests()` record what
+arrived; an error inside the server itself drops the connection, is kept in
+`failures()`, and makes `close()` reject, so a bug in the test server fails
+the suite instead of passing as the issuer's answer; `reset()` clears
+scripts, override, records and failures (issued codes stay; single-use
+anyway).
 
 ## What is deliberately NOT here
 

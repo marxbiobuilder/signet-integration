@@ -40,61 +40,65 @@ export interface TestGrant {
   readonly subject?: string;
 }
 
-// One member of a script union, with every other member's keys forbidden,
-// so `{ body, status }` is a type error rather than a silent pick.
-type Exclusive<T extends object, K extends PropertyKey> = T & {
-  readonly [P in Exclude<K, keyof T>]?: never;
-};
+// Every member of a union, each with all the OTHER members' keys forbidden,
+// so `{ body, status }` is a type error rather than a silent pick. The key
+// set is derived from the union itself: a member added later is excluded
+// from the others without a list to keep in step.
+//
+// Without exactOptionalPropertyTypes a forbidden key still admits an
+// explicit `undefined` (`{ status: 503, body: undefined }`), so the
+// dispatchers below test the discriminating keys in a fixed order and treat
+// `undefined` as absent, never `'key' in script`.
+type KeysOf<U> = U extends unknown ? keyof U : never;
+type OneOf<U, All = U> = U extends unknown
+  ? U & { readonly [K in Exclude<KeysOf<All>, keyof U>]?: never }
+  : never;
 
-type TokenScriptKey = 'body' | 'error' | 'hang' | 'location' | 'status';
-
-// The token endpoint's answer while a script is set, whatever the request:
-//   { status, error? }      that status, with an OAuth `error` body if given
-//   { body }                200 with this JSON body (e.g. no access_token)
-//   { hang: true }          no answer at all, until close()
-//   { hang: 'body' }        200 and its headers, then a body that never ends
+// The token endpoint's answer while a script is set, whatever the request,
+// in the order the dispatcher tries them:
 //   { status: 307, location }  a redirect, which the flow must not follow
-export type TokenEndpointScript =
-  | Exclusive<{ readonly body: unknown }, TokenScriptKey>
-  | Exclusive<
-      { readonly error?: string; readonly status: number },
-      TokenScriptKey
-    >
-  | Exclusive<{ readonly hang: 'body' | true }, TokenScriptKey>
-  | Exclusive<
-      { readonly location: string; readonly status: 307 | 308 },
-      TokenScriptKey
-    >;
-
-type DiscoveryScriptKey = 'document' | 'hang' | 'raw' | 'status';
-
-// Discovery's answer while an override is set:
-//   { document }        200 with this document instead of the server's own
-//   { status }          that status, empty body
-//   { raw }             200 with this exact body (e.g. not JSON)
 //   { hang: true }      no answer at all, until close()
 //   { hang: 'body' }    200 and its headers, then a body that never ends
-export type DiscoveryScript =
-  | Exclusive<
-      { readonly document: Record<string, unknown> },
-      DiscoveryScriptKey
-    >
-  | Exclusive<{ readonly status: number }, DiscoveryScriptKey>
-  | Exclusive<{ readonly raw: string }, DiscoveryScriptKey>
-  | Exclusive<{ readonly hang: 'body' | true }, DiscoveryScriptKey>;
+//   { status, raw }     that status with this exact body (a proxy's HTML)
+//   { status, error? }  that status, with an OAuth `error` body if given
+//   { body }            200 with this JSON body (e.g. no access_token)
+export type TokenEndpointScript = OneOf<
+  | { readonly body: unknown }
+  | { readonly error?: string; readonly status: number }
+  | { readonly hang: 'body' | true }
+  | { readonly location: string; readonly status: 307 | 308 }
+  | { readonly raw: string; readonly status: number }
+>;
+
+// Discovery's answer while an override is set:
+//   { hang: true }      no answer at all, until close()
+//   { hang: 'body' }    200 and its headers, then a body that never ends
+//   { raw }             200 with this exact body (e.g. not JSON)
+//   { status }          that status, empty body
+//   { document }        200 with this document instead of the server's own
+export type DiscoveryScript = OneOf<
+  | { readonly document: Record<string, unknown> }
+  | { readonly hang: 'body' | true }
+  | { readonly raw: string }
+  | { readonly status: number }
+>;
 
 export interface TestAuthorizationServer {
   readonly authorize: (authorizationUrl: string, grant?: TestGrant) => string;
+  // Rejects if a request failed inside the server since the last reset():
+  // a test server bug must fail the suite, not pass as the issuer's answer.
   readonly close: () => Promise<void>;
   readonly deny: (authorizationUrl: string, error?: string) => string;
   // How many discovery requests arrived.
   readonly discoveryRequests: () => number;
+  // Errors thrown inside the server while answering, since the last reset().
+  readonly failures: () => readonly unknown[];
   readonly issuer: string;
   readonly jwksUri: string;
   // Replaces discovery's answer; null restores the server's own document.
   readonly overrideDiscovery: (script: DiscoveryScript | null) => void;
-  // Back to a fresh server: no scripts, no override, nothing received.
-  // Issued codes are kept; they are single-use anyway.
+  // Back to a fresh server: no scripts, no override, nothing received, no
+  // failures. Issued codes are kept; they are single-use anyway.
   readonly reset: () => void;
   readonly scriptTokenEndpoint: (script: TokenEndpointScript | null) => void;
   // Signs any payload with the issuer's key, for a scripted token endpoint
@@ -120,6 +124,7 @@ export async function startTestAuthorizationServer(
   let script: TokenEndpointScript | null = null;
   let discoveryScript: DiscoveryScript | null = null;
   let discoveryCount = 0;
+  const failures: unknown[] = [];
   let issuer = '';
 
   // Serialised before the head is written, so a body that cannot be
@@ -151,12 +156,19 @@ export async function startTestAuthorizationServer(
         return;
       }
       if (script.hang !== undefined) return stall(response, script.hang);
-      if ('body' in script) return json(response, 200, script.body);
-      return json(
-        response,
-        script.status,
-        script.error === undefined ? {} : { error: script.error },
-      );
+      if (script.raw !== undefined) {
+        response.writeHead(script.status, { 'content-type': 'text/html' });
+        response.end(script.raw);
+        return;
+      }
+      if (script.status !== undefined) {
+        return json(
+          response,
+          script.status,
+          script.error === undefined ? {} : { error: script.error },
+        );
+      }
+      return json(response, 200, script.body);
     }
     const issued = codes.get(form.code ?? '');
     // Single use, as a real server holds it.
@@ -220,15 +232,13 @@ export async function startTestAuthorizationServer(
       );
     }
     if (request.method === 'POST' && path === '/oauth2/token') {
-      // A failure here is the test server's own bug: said out loud, not
-      // folded into a 500 the flow would read as the issuer's.
+      // A failure here is the test server's own bug. Recorded (failures(),
+      // and close() rejects) and answered with a dropped connection: never
+      // a 500 the flow would read as the issuer's, which a test expecting
+      // TOKEN_EXCHANGE_FAILED would accept.
       token(request, response).catch((error: unknown) => {
-        console.error(
-          'test authorization server: token endpoint failed',
-          error,
-        );
-        if (response.headersSent) response.destroy();
-        else json(response, 500, {});
+        failures.push(error);
+        response.destroy();
       });
       return;
     }
@@ -288,6 +298,12 @@ export async function startTestAuthorizationServer(
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await keys.close();
+      if (failures.length > 0) {
+        throw new Error(
+          `test authorization server: ${failures.length} request(s) failed inside the server; see failures()`,
+          { cause: failures[0] },
+        );
+      }
     },
     deny: (authorizationUrl, error = 'access_denied') => {
       const request = read(authorizationUrl);
@@ -297,6 +313,7 @@ export async function startTestAuthorizationServer(
       return back.toString();
     },
     discoveryRequests: () => discoveryCount,
+    failures: () => [...failures],
     issuer,
     jwksUri: keys.keys.url,
     overrideDiscovery: (next) => {
@@ -306,6 +323,7 @@ export async function startTestAuthorizationServer(
       script = null;
       discoveryScript = null;
       discoveryCount = 0;
+      failures.length = 0;
       received.length = 0;
     },
     scriptTokenEndpoint: (next) => {

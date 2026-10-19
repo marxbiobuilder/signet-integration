@@ -51,8 +51,10 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `SignetBearerVerification.issuer`：設定的 issuer（旗標關閉時為 `null`），
     login flow 的 discovery 用它，設定只讀一次。
   - testing：`startTestAuthorizationServer({ clientId })`，含
-    `overrideDiscovery()`、`scriptTokenEndpoint()`（含 redirect 與 body 卡住）、
-    `sign()`、`discoveryRequests()`、`reset()`。
+    `overrideDiscovery()`、`scriptTokenEndpoint()`（含 raw body、redirect、
+    body 卡住；腳本形狀互斥）、`sign()`、`discoveryRequests()`、`reset()`。
+    server 自身出錯時中斷連線並記入 `failures()`，`close()` 會 reject，
+    不會偽裝成 issuer 的 500。
 
 ### Changed
 

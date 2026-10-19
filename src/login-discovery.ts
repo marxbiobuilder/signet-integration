@@ -12,11 +12,16 @@ import {
 // tolerate), and both endpoints are https outside development. A failure is
 // not cached: the next login tries again.
 //
-// Design Decision: a success IS cached for good, with no TTL. Moving an
-// endpoint is a breaking change on Signet's side, announced to every
-// resource server in advance (its resource-server contract), and a restart
-// picks the new document up; a TTL would add a refetch path to get wrong for
-// a change that does not happen silently.
+// Design Decision: a success IS cached for good, with no TTL. Signet's
+// resource-server contract (docs/resource-server-contract.md in
+// marxbiotech/signet-marxbio-tech) makes a change of the issuer or the JWKS
+// address a breaking change announced to every resource server in advance.
+// It says nothing of the authorization and token endpoints; that they do
+// not move unannounced either is an assumption drawn from it, not a
+// promise. If one moves anyway, every login fails -- discovery_failed, or
+// token_exchange_failed detail=status_404 -- until the process restarts and
+// refetches. A TTL would add a refetch path to get wrong for a change
+// expected to be announced; a restart is the documented remedy.
 
 export interface LoginEndpoints {
   readonly authorizationEndpoint: string;
