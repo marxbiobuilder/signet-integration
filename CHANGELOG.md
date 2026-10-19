@@ -7,6 +7,12 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-beta.0] - 2026-10-19
+
+預覽版，發佈在 npm dist-tag `beta`（`pnpm add @marxbiotech/signet-integration@beta`），
+`latest` 仍是 0.2.0。login flow 還沒和真實的 Signet 接過，`env.login` 的形狀與
+`testing` 的 authorization server API 在 0.3.0 之前都可能再改。
+
 ### Added
 
 - `SignetBearerVerification.verifyToken(token)`：驗證不是從 `Authorization`
@@ -127,7 +133,8 @@ principal 由 Passport 掛到 `request.user`；套件提供 helper 讓 401／403
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0-beta.0...HEAD
+[0.3.0-beta.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...v0.3.0-beta.0
 [0.2.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/marxbiobuilder/signet-integration/releases/tag/v0.1.1
