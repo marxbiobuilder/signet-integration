@@ -172,16 +172,31 @@ git tag v0.2.0 && git push origin v0.2.0
 `v<package.json version>`, runs lint, tests and build, and publishes with npm
 trusted publishing (OIDC). Nothing is published from a developer machine.
 
-A prerelease goes out the same way, from a `release/<version>` branch that is
-tagged but not merged. Its first prerelease identifier becomes the npm
-dist-tag, so `latest` stays on the last stable release:
+A prerelease goes out the same way, from a release branch named after the
+full version (`release/0.3.0-beta.0`) that is tagged but not merged. Its first
+prerelease identifier becomes the npm dist-tag, so `latest` stays on the last
+stable release.
+
+The workflow that runs is the `publish.yml` in the tagged commit, so the
+release branch must contain this one: cut it from the feature branch and merge
+`main` into it, or cherry-pick the workflow change. A tagged commit with an
+older `publish.yml` runs `npm publish` without `--tag`, which npm 11 refuses
+for a prerelease.
 
 ```sh
+git switch -c release/0.3.0-beta.0 feat/some-feature
+git merge main
 # package.json "version": "0.3.0-beta.0", CHANGELOG has [0.3.0-beta.0]
-git tag v0.3.0-beta.0 && git push origin v0.3.0-beta.0
-# → npm publish --tag beta; consumers opt in with
+git tag v0.3.0-beta.0 && git push origin v0.3.0-beta.0   # → npm publish --tag beta
+```
+
+Consumers opt in explicitly:
+
+```sh
 pnpm add @marxbiotech/signet-integration@beta
 ```
 
-The identifier must start with a letter and must not be `latest`
-(`0.3.0-0` and `1.0.0-latest.1` are refused).
+The identifier must start with a letter (`0.3.0-0` is refused before the
+build). npm itself also refuses an identifier that parses as a semver range,
+such as `x` or `v1`, but only at the publish step. `latest` is refused too
+(`1.0.0-latest.1`).

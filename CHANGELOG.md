@@ -10,8 +10,9 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - 發佈 workflow 支援 prerelease：版本號帶 prerelease 時，以第一個 prerelease
-  識別字當 npm dist-tag（`0.3.0-beta.0` 發成 `beta`），不再落到 `latest`。識
-  別字不是字母開頭或為 `latest` 時拒絕發佈。
+  識別字當 npm dist-tag（`0.3.0-beta.0` 發成 `beta`）。先前不帶 `--tag` 的
+  `npm publish` 會被 npm 11 拒絕發佈 prerelease。識別字不是字母開頭或為
+  `latest` 時拒絕發佈。正式版仍不帶 `--tag`，保留 npm 不讓 `latest` 倒退的檢查。
 
 ## [0.2.0] - 2026-09-25
 
