@@ -76,6 +76,8 @@ export {
 export {
   bearerToken,
   SIGNET_JWT_STRATEGY,
+  type SignetBearerRejection,
+  SignetBearerRejectionEnum,
   SignetBearerVerification,
   SignetJwtStrategy,
 } from './strategy';
