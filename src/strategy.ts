@@ -6,7 +6,11 @@ import { Strategy } from 'passport-custom';
 
 import { readSignetAuthConfig } from './config';
 import { SignetDeploymentProfileService } from './deployment-profile';
-import { JwtVerifier, type VerifiedSignetIdentity } from './jwt-verifier';
+import {
+  JwtVerifier,
+  type VerifiedSignetIdentity,
+  type VerifyResult,
+} from './jwt-verifier';
 import { REFUSAL_ROUTE_MAX, sanitiseLogToken, truncate } from './log-sanitise';
 import {
   SIGNET_INTEGRATION_OPTIONS,
@@ -15,15 +19,34 @@ import {
 
 export const SIGNET_JWT_STRATEGY = 'signet-jwt';
 
+// The rejection reasons this file produces, alongside the verifier's own
+// (JwtRejectionEnum, jose's ERR_* codes). None is a JWT check: the channel is
+// off, or the request carried no usable Bearer header.
+export const SignetBearerRejectionEnum = {
+  DISABLED: 'signet_disabled',
+  HEADER_MALFORMED: 'header_malformed',
+  HEADER_MISSING: 'header_missing',
+} as const;
+export type SignetBearerRejection =
+  (typeof SignetBearerRejectionEnum)[keyof typeof SignetBearerRejectionEnum];
+
 // What a Signet strategy does before anything consumer-specific: read the
 // channel's settings once, build the verifier once (the remote JWKS cache
-// lives on it), and turn a request into a verified identity or a logged
-// `false`. SignetJwtStrategy and SignetPrincipalStrategy both hold one.
+// lives on it), and verify. Two ways in:
 //
-// Failure is `false`, never a throw. Passport moves to the next strategy only
-// on fail(); error() short-circuits the chain, and Nest turns a thrown
-// validate() into error(). A throw would also replace the guard's uniform 401
-// with whatever the exception said.
+//   verify(request)     a request's Bearer header → a verified identity or a
+//                       LOGGED `false`
+//   verifyToken(token)  a token from anywhere else → a VerifyResult, logged by
+//                       no one but the caller
+//
+// SignetJwtStrategy and SignetPrincipalStrategy both hold one.
+//
+// A rejected credential is `false` / `{ ok: false }`, never a throw. Passport
+// moves to the next strategy only on fail(); error() short-circuits the
+// chain, and Nest turns a thrown validate() into error(). A throw would also
+// replace the guard's uniform 401 with whatever the exception said. Only a
+// defect in this process still throws (see JwtVerifier), so it surfaces as a
+// 500 rather than as a bad token.
 //
 // The log line carries the reason and the source address and NOTHING derived
 // from the token: no fingerprint, no sub.
@@ -51,22 +74,53 @@ export class SignetBearerVerification {
     }
   }
 
+  // False when the channel's flag is off: a caller that must decide before
+  // it has a token (a login flow, before exchanging a code) asks here.
+  get enabled(): boolean {
+    return this.verifier !== null;
+  }
+
   async verify(request: Request): Promise<VerifiedSignetIdentity | false> {
-    if (this.verifier === null) return this.reject(request, 'signet_disabled');
+    // Before the header, not left to verifyToken: with the channel off, a
+    // request without a header is signet_disabled, not header_missing.
+    if (this.verifier === null) {
+      return this.reject(request, SignetBearerRejectionEnum.DISABLED);
+    }
     const token = bearerToken(request);
     if (token === undefined) {
       const present = typeof request.headers.authorization === 'string';
       return this.reject(
         request,
-        present ? 'header_malformed' : 'header_missing',
+        present
+          ? SignetBearerRejectionEnum.HEADER_MALFORMED
+          : SignetBearerRejectionEnum.HEADER_MISSING,
       );
     }
-    const result = await this.verifier.verify(token);
+    const result = await this.verifyToken(token);
     if (!result.ok) return this.reject(request, result.reason);
     return result.identity;
   }
 
-  // Every false path goes through here, so there is no unlogged rejection.
+  // The verification step itself, shared with verify(); called directly for
+  // a token that did not arrive in a header -- one a login flow received
+  // from the token endpoint. It writes NO line, so a direct caller owes
+  // three things:
+  //
+  //   - log every { ok: false }, signet_disabled included, under its own
+  //     metric and with whatever request context it has;
+  //   - sanitise `reason` before it reaches a key=value line, as reject()
+  //     does: it is open (jose's ERR_* codes, Node's errno strings verbatim);
+  //   - let a throw propagate: it is a defect in this process, not a bad
+  //     token, and must become a 500.
+  async verifyToken(token: string): Promise<VerifyResult> {
+    if (this.verifier === null) {
+      return { ok: false, reason: SignetBearerRejectionEnum.DISABLED };
+    }
+    return this.verifier.verify(token);
+  }
+
+  // Every false that verify() returns goes through here, so the header path
+  // has no unlogged rejection. verifyToken() bypasses it by design.
   private reject(request: Request, reason: string): false {
     this.logger.warn(
       `signet auth rejected: metric=signet_auth_rejected reason=${sanitiseLogToken(reason)} source=${sanitiseLogToken(request.ip ?? 'none')} method=${sanitiseLogToken(request.method)} route=${sanitiseLogToken(truncate(request.originalUrl, REFUSAL_ROUTE_MAX))}`,

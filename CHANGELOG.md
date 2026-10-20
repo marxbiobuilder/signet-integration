@@ -7,6 +7,19 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SignetBearerVerification.verifyToken(token)`：驗證不是從 `Authorization`
+  header 來的 token（例如 login flow 從 token endpoint 換到的），走同一個
+  verifier、同樣的 `signet_disabled`；回傳 `VerifyResult`，不寫 log。直接呼叫
+  的一方要自己記錄每個 `ok: false`（記錄前先 sanitise `reason`）；程序本身的
+  缺陷仍會 throw，應成為 500。`verify(request)` 改為呼叫它，行為與 log 不變。
+- `SignetBearerVerification.enabled`：Signet 通道旗標（`signetEnabled`）是否
+  開啟，給拿到 token 之前就要判斷的呼叫端。
+- `SignetBearerRejectionEnum`（`DISABLED`、`HEADER_MISSING`、
+  `HEADER_MALFORMED`）：`SignetBearerVerification` 自己產生的拒絕原因，與
+  `JwtRejectionEnum` 並列。
+
 ### Changed
 
 - 發佈 workflow 支援 prerelease：版本號帶 prerelease 時，以第一個 prerelease
