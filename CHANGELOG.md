@@ -84,6 +84,10 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `challengeFor`／`BearerChallengeFilter`：`SignetLoginError` 不加
   `WWW-Authenticate`——瀏覽器登入失敗不是 Bearer 請求。
+- 發佈 workflow 支援 prerelease：版本號帶 prerelease 時，以第一個 prerelease
+  識別字當 npm dist-tag（`0.3.0-beta.0` 發成 `beta`）。先前不帶 `--tag` 的
+  `npm publish` 會被 npm 11 拒絕發佈 prerelease。識別字不是字母開頭或為
+  `latest` 時拒絕發佈。正式版仍不帶 `--tag`，保留 npm 不讓 `latest` 倒退的檢查。
 - testing：`startTestIssuer().sign()`（與 test authorization server 的
   `sign()`）在 payload 自帶 `exp` 時沿用它，不再一律改成五分鐘後，讓測試能簽
   出過期的 token；payload 帶 `exp: undefined`（有這個 key）時完全不簽 `exp`，
