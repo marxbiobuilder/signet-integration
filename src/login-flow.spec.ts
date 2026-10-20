@@ -256,7 +256,7 @@ describe('SignetLoginFlow', () => {
   });
 
   describe('complete', () => {
-    it('exchanges the code with the PKCE verifier and returns the access token’s verified identity', async () => {
+    it('exchanges the code with the PKCE verifier and returns the access token’s verified identity and the ID token’s claims', async () => {
       const flow = build();
       const { cookie, url } = await begin(flow);
       const back = server.authorize(url, {
@@ -275,7 +275,7 @@ describe('SignetLoginFlow', () => {
       });
       // The ID token's claims beside the identity, not mixed into it.
       expect(login.idTokenClaims).toMatchObject({
-        aud: CLIENT_ID,
+        aud: [CLIENT_ID],
         email: 'someone@example.com',
         email_verified: true,
         sub: 'person-1',
@@ -425,9 +425,11 @@ describe('SignetLoginFlow', () => {
       it('names a tampered cookie unopenable', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
+        // The second-to-last character, replaced by one it is not: the
+        // last carries padding bits a change might not touch.
         const flipped =
           cookie.slice(0, -2) +
-          (cookie.endsWith('A') ? 'B' : 'A') +
+          (cookie.at(-2) === 'A' ? 'B' : 'A') +
           cookie.slice(-1);
         expect(
           await rejection(
@@ -862,22 +864,51 @@ describe('SignetLoginFlow', () => {
         }
       });
 
-      it('answers TOKEN_REJECTED for an ID token for several audiences that does not name this client as azp', async () => {
+      it.each([
+        ['the client as a string', CLIENT_ID],
+        ['the client alone in an array', [CLIENT_ID]],
+      ])('accepts an ID token whose aud is %s', async (_, aud) => {
+        const idToken = await server.sign(idTokenPayload({ aud }));
+        const { login } = await completeWith({ id_token: idToken });
+        expect(login.idTokenClaims.aud).toEqual(aud);
+      });
+
+      it.each([
+        ['without azp', {}],
+        ['even with azp naming this client', { azp: CLIENT_ID }],
+      ])(
+        'answers TOKEN_REJECTED for an ID token for this client and another, %s',
+        async (_, overrides) => {
+          const idToken = await server.sign(
+            idTokenPayload({ aud: [CLIENT_ID, 'someone-else'], ...overrides }),
+          );
+          expect(await refused({ id_token: idToken })).toContain(
+            'detail=id_token:ERR_JWT_EXTRA_AUDIENCE',
+          );
+        },
+      );
+
+      it('answers TOKEN_REJECTED for an ID token whose azp names another client', async () => {
         const idToken = await server.sign(
-          idTokenPayload({ aud: [CLIENT_ID, 'someone-else'] }),
+          idTokenPayload({ azp: 'someone-else' }),
         );
         expect(await refused({ id_token: idToken })).toContain(
           'detail=id_token:ERR_JWT_AZP_MISMATCH',
         );
       });
 
-      it('accepts an ID token for several audiences whose azp is this client', async () => {
-        const idToken = await server.sign(
-          idTokenPayload({ aud: [CLIENT_ID, 'someone-else'], azp: CLIENT_ID }),
-        );
-        const { login } = await completeWith({ id_token: idToken });
-        expect(login.idTokenClaims.azp).toBe(CLIENT_ID);
-      });
+      it.each([
+        ['an empty sub', { sub: '' }, 'ERR_JWT_NO_SUB'],
+        ['no exp', { exp: undefined }, 'ERR_JWT_NO_EXP'],
+      ])(
+        'answers TOKEN_REJECTED for an ID token with %s',
+        async (_, overrides, reason) => {
+          const idToken = await server.sign(idTokenPayload(overrides));
+          expect(await refused({ id_token: idToken })).toContain(
+            `detail=id_token:${reason}`,
+          );
+        },
+      );
     });
 
     it('logs no code, no state and no query string', async () => {

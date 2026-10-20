@@ -69,9 +69,11 @@ interface LoginSettings {
 
 // What the login adds to the access token's identity, for the resolver: the
 // verified ID token's claims, frozen. With `email` among the entry's scopes
-// Signet puts `email` and `email_verified` here -- a web login's address
-// comes from here, not from the access token, which carries `email` only
-// for a resource Signet marks `erp`.
+// Signet puts `email`, `email_verified` and `hd` here -- a web login's
+// address comes from here, not from the access token, which carries `email`
+// only for a resource Signet marks `erp: true`. The claims are typed as
+// jose's JWTPayload, so `email` is `unknown`: the resolver narrows it before
+// using it.
 export interface SignetLoginContext {
   readonly idTokenClaims: Readonly<JWTPayload>;
 }
@@ -82,8 +84,10 @@ export interface SignetLoginResult {
   readonly login: SignetLoginContext;
 }
 
-// What the token endpoint answered with; the ID token is checked for after
-// the access token.
+// What the token endpoint answered with. A missing `id_token` does not fail
+// the exchange: the access token is verified first, so its refusals
+// (ADMISSION_SCOPE_NOT_GRANTED included) report first, and a missing ID
+// token is TOKEN_REJECTED.
 interface TokenResponse {
   readonly accessToken: string;
   readonly idToken: string | undefined;
@@ -102,10 +106,10 @@ type StateMatch =
 //
 // The identity comes from the ACCESS token, verified by the same
 // SignetBearerVerification the Bearer channel uses: `identity` means the
-// same access-token claims either way. The ID token is verified too (the
-// entry's scopes always include `openid`) and must name the same `sub`; its
-// claims travel beside the identity, not in it. No nonce (see
-// JwtVerifier.verifyIdToken), and no token is kept.
+// same access-token claims either way. The ID token is verified too
+// (validateLoginEntry guarantees the entry's scopes include `openid`) and
+// must name the same `sub`; its claims travel beside the identity, not in
+// it. No nonce (see JwtVerifier.verifyIdToken), and no token is kept.
 //
 // Every refusal throws SignetLoginError through reject(), which writes the
 // one rejection line. Nothing derived from the token, the code or the state
@@ -331,7 +335,9 @@ export class SignetLoginFlow {
   ): Promise<Readonly<JWTPayload>> {
     const fail = (detail: string) =>
       this.reject(request, SignetLoginFailureEnum.TOKEN_REJECTED, detail);
-    // `openid` was asked for, so its absence is the issuer's to explain.
+    // `openid` was asked for, and Signet's consent screen always keeps a
+    // requested `openid` (the user cannot untick it), so a missing ID token
+    // is the issuer's to explain, not the user's choice.
     if (idToken === undefined) throw fail('id_token_missing');
     const result = await this.verification.verifyIdToken(
       idToken,

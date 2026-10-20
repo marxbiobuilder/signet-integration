@@ -29,11 +29,15 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `validate()` 先驗 state（IdP 的錯誤回應也一樣）、再換 code、驗 access
     token 與 ID token，最後交給 `SignetDecision`。`P` 要明確寫出，無法推斷。
   - ID token：與 access token 同一組 JWKS、演算法白名單、issuer 與 clock
-    tolerance；`aud` 須包含 login client id，有多個 `aud` 時 `azp` 須等於
-    client id；`sub` 須等於 access token 的 `sub`。不做 nonce（PKCE 已綁定
-    瀏覽器，ID token 直接從 token endpoint 取得）。缺少或驗證失敗都是
-    `TOKEN_REJECTED`，log detail 為 `id_token_missing`、
-    `id_token_subject_mismatch` 或 `id_token:<jose code>`。網頁登入的 email
+    tolerance，`exp` 必須存在、`sub` 不可為空（不要求 `iat`）；`aud` 必須
+    恰好是 login client id（字串或單一元素陣列），多個 `aud` 的 ID token
+    即使 `azp` 正確也拒絕；有 `azp` 時須等於 client id；`sub` 須等於 access
+    token 的 `sub`。不做 nonce（OIDC Core §3.1.2.1 對 code flow 為
+    OPTIONAL；PKCE 已綁定瀏覽器，ID token 直接從 token endpoint 取得）。
+    缺少或驗證失敗都是 `TOKEN_REJECTED`，log detail 為 `id_token_missing`、
+    `id_token_subject_mismatch` 或 `id_token:<rejection reason>`（與 access
+    token 的 detail 同一套詞彙：jose 的 `ERR_*`、`JwtRejectionEnum`、Node
+    errno 字串）。網頁登入的 email
     請用 `scopes: ['openid', 'email']` 從 ID token 取得：Signet 只對
     `erp: true` 的 resource 在 access token 放 `email`。
   - `SignetLoginError`／`SignetLoginFailureEnum`：login 路徑失敗一律 throw 並
@@ -56,21 +60,23 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     旗標開啟時讀，拒絕空的或前後帶空白的 client id、不足 32 bytes 的
     secret，以及不是 http(s) URL 的 issuer（否則每次登入都會被歸成
     transport 失敗）。
-  - entry 在建立 class 時驗證並凍結成副本（名稱、scope token、自訂 `scopes`
-    必須包含 `openid`、每個環境的 redirect URI）；`onModuleInit` 時再對照 options 的 deployed 環境，缺少或
-    多出都會失敗。subclass 覆寫 `onModuleInit` 而沒呼叫 super 時，flow 會在
+  - entry 在建立 class 時驗證並凍結成副本（名稱、scope token、自訂
+    `scopes` 必須包含 `openid`、每個環境的 redirect URI）；`onModuleInit`
+    時再對照 options 的 deployed 環境，缺少或多出都會失敗。subclass 覆寫 `onModuleInit` 而沒呼叫 super 時，flow 會在
     第一次登入時建立。
   - `SignetBearerVerification.issuer`：設定的 issuer（旗標關閉時為 `null`），
     login flow 的 discovery 用它，設定只讀一次。
   - `SignetBearerVerification.verifyIdToken(token, clientId)` 與
     `JwtVerifier.verifyIdToken`：回傳 `IdTokenVerifyResult`，不寫 log，呼叫端
     的責任同 `verifyToken`。`JwtRejectionEnum.AZP_MISMATCH`
-    （`ERR_JWT_AZP_MISMATCH`）。
+    （`ERR_JWT_AZP_MISMATCH`）與 `JwtRejectionEnum.EXTRA_AUDIENCE`
+    （`ERR_JWT_EXTRA_AUDIENCE`，ID token 的 `aud` 不只本 client）。
   - testing：`startTestAuthorizationServer({ clientId })`，含
     `overrideDiscovery()`、`scriptTokenEndpoint()`（含 raw body、redirect、
     body 卡住；腳本形狀互斥）、`sign()`、`discoveryRequests()`、`reset()`。
-    授權了 `openid` 時 token response 帶 `id_token`（`aud` 為 client id、
-    `sub` 與 access token 相同），`TestGrant.idTokenClaims` 放額外 claims。
+    授權了 `openid` 時 token response 帶 `id_token`（`aud` 為
+    `[clientId]` 單一元素陣列、`sub` 與 access token 相同），
+    `TestGrant.idTokenClaims` 放額外 claims。
     server 自身出錯時中斷連線並記入 `failures()`，`close()` 會 reject，
     不會偽裝成 issuer 的 500。
 
@@ -80,11 +86,16 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WWW-Authenticate`——瀏覽器登入失敗不是 Bearer 請求。
 - testing：`startTestIssuer().sign()`（與 test authorization server 的
   `sign()`）在 payload 自帶 `exp` 時沿用它，不再一律改成五分鐘後，讓測試能簽
-  出過期的 token。
-- 相對於 `0.3.0-beta.0`：login strategy 的 `resolve` 多了第二個參數
-  `login: SignetLoginContext`，subclass 不再 `implements
-  SignetPrincipalResolver<P>`；token response 沒有 `id_token`、或 entry 的
-  `scopes` 沒有 `openid`，登入都會失敗。
+  出過期的 token；payload 帶 `exp: undefined`（有這個 key）時完全不簽 `exp`，
+  用來測沒有 `exp` 的 token。
+- 相對於 `0.3.0-beta.0`：
+  - login strategy 的 `resolve` 多了第二個參數 `login: SignetLoginContext`，
+    subclass 不再 `implements SignetPrincipalResolver<P>`。
+  - token response 沒有 `id_token` 時登入失敗（`TOKEN_REJECTED`，detail
+    `id_token_missing`）。
+  - entry 的 `scopes` 沒有 `openid` 時，`SignetLoginStrategy(entry)` 在建立
+    strategy class 時就 throw，app 無法啟動。
+  - 多個 `aud` 的 ID token 一律拒絕。
 
 ## [0.2.0] - 2026-09-25
 

@@ -25,7 +25,8 @@ import { startTestIssuer } from './signet-token';
 // (no `resource` in the request: no `aud`, like a client with several
 // audiences that did not pick one), scopes in `scp`, `client_id` present.
 // When `openid` was granted the response carries an `id_token` too: `aud`
-// the client, the access token's `sub`, and the grant's `idTokenClaims`.
+// the client as a single-element array (as Hydra issues it), the access
+// token's `sub`, and the grant's `idTokenClaims`.
 // The issuer is this server's origin, which is also what discovery reports.
 
 export interface TestAuthorizationServerOptions {
@@ -106,7 +107,9 @@ export interface TestAuthorizationServer {
   readonly reset: () => void;
   readonly scriptTokenEndpoint: (script: TokenEndpointScript | null) => void;
   // Signs any payload with the issuer's key, for a scripted token endpoint
-  // to return a token the flow would not get from a real one.
+  // to return a token the flow would not get from a real one. Five minutes
+  // unless the payload has an `exp` key: a number is kept, `undefined`
+  // signs a token without one.
   readonly sign: (payload: JWTPayload) => Promise<string>;
   // Every token request received, its form fields as sent.
   readonly tokenRequests: () => readonly Readonly<Record<string, string>>[];
@@ -200,7 +203,7 @@ export async function startTestAuthorizationServer(
     const idToken = scopes.includes('openid')
       ? await keys.sign({
           ...idTokenClaims,
-          aud: options.clientId,
+          aud: [options.clientId],
           iss: issuer,
           sub: subject,
         })

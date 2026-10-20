@@ -144,7 +144,7 @@ describe('startTestAuthorizationServer', () => {
       Buffer.from(String(token).split('.')[1], 'base64url').toString(),
     ) as Record<string, unknown>;
 
-  it('adds the ID token Signet would when openid was granted: aud the client, the same sub, the grant’s idTokenClaims', async () => {
+  it('adds the ID token Signet would when openid was granted: aud the client alone, the same sub, the grant’s idTokenClaims', async () => {
     const code = codeFrom(
       server.authorize(authorizationUrl(), {
         claims: { erp: 'on-the-access-token' },
@@ -155,7 +155,7 @@ describe('startTestAuthorizationServer', () => {
     const { body } = await exchange(code);
     const idToken = payloadOf(body.id_token);
     expect(idToken).toMatchObject({
-      aud: CLIENT,
+      aud: [CLIENT],
       email: 'someone@example.com',
       email_verified: true,
       iss: server.issuer,
@@ -177,6 +177,19 @@ describe('startTestAuthorizationServer', () => {
   it('signs with the payload’s own exp when it names one', async () => {
     const exp = Math.floor(Date.now() / 1000) - 60;
     expect(payloadOf(await server.sign({ exp, sub: 'x' })).exp).toBe(exp);
+  });
+
+  it('signs with no exp when the payload spells it out as undefined', async () => {
+    expect(
+      payloadOf(await server.sign({ exp: undefined, sub: 'x' })),
+    ).not.toHaveProperty('exp');
+  });
+
+  it('signs for five minutes when the payload has no exp key', async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const { exp } = payloadOf(await server.sign({ sub: 'x' }));
+    expect(exp).toBeGreaterThanOrEqual(before + 300);
+    expect(exp).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 300);
   });
 
   describe('scripted token endpoint', () => {

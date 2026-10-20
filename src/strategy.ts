@@ -33,7 +33,7 @@ export type SignetBearerRejection =
 
 // What a Signet strategy does before anything consumer-specific: read the
 // channel's settings once, build the verifier once (the remote JWKS cache
-// lives on it), and verify. Two ways in:
+// lives on it), and verify. Three ways in:
 //
 //   verify(request)     a request's Bearer header → a verified identity or a
 //                       LOGGED `false`
@@ -43,7 +43,8 @@ export type SignetBearerRejection =
 //                       the login flow's ID token, against the same keys →
 //                       an IdTokenVerifyResult, logged by no one but the caller
 //
-// SignetJwtStrategy and SignetPrincipalStrategy both hold one.
+// SignetJwtStrategy, SignetPrincipalStrategy and SignetLoginFlow each hold
+// one.
 //
 // A rejected credential is `false` / `{ ok: false }`, never a throw. Passport
 // moves to the next strategy only on fail(); error() short-circuits the

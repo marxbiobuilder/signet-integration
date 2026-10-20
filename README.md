@@ -116,10 +116,13 @@ For a web app that signs people in with Signet and then runs on its own
 session: the browser goes through the authorization-code flow, the package
 exchanges the code, verifies the **access token** and the **ID token**, and
 runs your resolver -- the `SignetPrincipalResolver` contract as above, plus a
-second argument carrying the ID token's claims. A class cannot extend both
-strategies, so to share one resolver between the channels, inject a resolver
-service into each strategy and delegate `resolve` to it. What you do with the
-principal (issue a session cookie, redirect) is yours.
+second argument carrying the ID token's claims. Only a resolver keyed by
+`sub` (or another access-token claim) serves both channels as it is: the
+Bearer channel has no ID token. One that needs the ID token's `email` should
+record `sub` → email at web sign-in and look the user up by `sub` on the
+Bearer channel, as Signet's `docs/resource-policy.md` (in
+marxbiotech/signet-marxbio-tech) recommends. What you do with the principal
+(issue a session cookie, redirect) is yours.
 
 ```ts
 export const WEB_LOGIN = {
@@ -140,7 +143,11 @@ export class WebSignetLogin extends SignetLoginStrategy<User>(WEB_LOGIN) { // na
     identity: VerifiedSignetIdentity,       // from the access token, as on the Bearer channel
     { idTokenClaims }: SignetLoginContext,  // from the ID token
   ): Promise<PrincipalResolution<User>> {
-    const user = await this.users.findByEmail(idTokenClaims.email as string);
+    const { email, email_verified } = idTokenClaims; // unknown: narrow before any lookup
+    if (typeof email !== 'string' || email_verified !== true) {
+      return { ok: false, reason: 'no_email' };
+    }
+    const user = await this.users.findByEmail(email);
     return user ? { ok: true, principal: user } : { ok: false, reason: 'no_account' };
   }
 }
@@ -231,15 +238,21 @@ What to know:
 - **Take the user's email from the ID token, not the access token.** Ask for
   the `email` scope (`scopes: ['openid', 'email']`): Signet then puts
   `email`, `email_verified: true` and `hd` on the ID token, and its consent
-  screen makes `email` mandatory (Signet's `docs/resource-policy.md`). The
-  ID token is checked against the same keys, algorithms, issuer and clock
-  tolerance as the access token, its `aud` must include the client id (with
-  several audiences, `azp` must be the client id), and its `sub` must equal
-  the access token's. No nonce: the code is bound to the browser by PKCE and
-  the ID token comes straight from the token endpoint. A missing or failing
-  ID token is `TOKEN_REJECTED`, its detail starting `id_token`
-  (`id_token_missing`, `id_token_subject_mismatch`, `id_token:<jose code>`).
-  `scopes` without `openid` is refused when the strategy class is created.
+  screen makes `email` mandatory (Signet's `docs/resource-policy.md` in
+  marxbiotech/signet-marxbio-tech). The ID token is checked against the
+  same keys, algorithms, issuer and clock tolerance as the access token, with
+  `exp` required and `sub` non-empty (`iat` is not required). Its `aud` must
+  be exactly the client id (a string or a one-element array; a token for
+  several audiences is refused even with a matching `azp`), an `azp`, when
+  present, must be the client id, and its `sub` must equal the access
+  token's. No nonce (OIDC Core §3.1.2.1 makes it optional for the code
+  flow): the code is bound to the browser by PKCE and the ID token comes
+  straight from the token endpoint. A missing or failing ID token is
+  `TOKEN_REJECTED`, its detail starting `id_token`: `id_token_missing`,
+  `id_token_subject_mismatch`, or `id_token:<rejection reason>`, the reason
+  in the same vocabulary as an access token's detail (jose's `ERR_*` codes,
+  `JwtRejectionEnum`, Node's errno strings). `scopes` without `openid` is
+  refused when the strategy class is created.
 - The issuer's discovery document is fetched on the first login and kept
   until the process restarts. Signet announces a change of its issuer or
   JWKS address in advance (same contract); if its authorization or token
@@ -293,8 +306,11 @@ Testing: `@marxbiotech/signet-integration/testing` exports `startTestIssuer()`
 (a local JWKS endpoint plus a signer that mints tokens in the shape Signet
 issues), `startJwksServer()`, `FIXTURE_OPTIONS` and `FIXTURE_DEVELOPMENT_PROFILE`,
 and for the login flow `startTestAuthorizationServer({ clientId })`: discovery,
-and a token endpoint that checks PKCE, `redirect_uri` and `client_id` and
-redeems each code once; `authorize(url, grant?)` / `deny(url, error?)` play
+and a token endpoint that checks PKCE, `redirect_uri` and `client_id`,
+redeems each code once, and issues an `id_token` when `openid` is granted
+(`aud: [clientId]`, the access token's `sub`, extra claims from
+`TestGrant.idTokenClaims`);
+`authorize(url, grant?)` / `deny(url, error?)` play
 the IdP's login page (throwing on a malformed request) and return the
 callback URL; `scriptTokenEndpoint()` makes the token endpoint fail (a status
 with or without an OAuth error, a raw body such as a proxy's HTML, no
@@ -302,7 +318,8 @@ with or without an OAuth error, a raw body such as a proxy's HTML, no
 `overrideDiscovery()` makes discovery fail (a status, a raw body, no answer,
 a stalled body) or replaces its document -- one script shape at a time, the
 union rejects mixtures; `sign()` signs any payload with the issuer's key
-(`exp` 5 min); `tokenRequests()` and `discoveryRequests()` record what
+(`exp` 5 min unless the payload sets its own; `exp: undefined` signs none);
+`tokenRequests()` and `discoveryRequests()` record what
 arrived; an error inside the server itself drops the connection, is kept in
 `failures()`, and makes `close()` reject, so a bug in the test server fails
 the suite instead of passing as the issuer's answer; `reset()` clears

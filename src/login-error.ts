@@ -18,14 +18,18 @@ import { UnauthorizedException } from '@nestjs/common';
 //   DISCOVERY_FAILED             the issuer's metadata could not be fetched
 //                                or did not pass its checks
 //   TOKEN_EXCHANGE_FAILED        the token endpoint refused, failed or did
-//                                not answer in time, or returned no token
+//                                not answer in time, or returned no access
+//                                token (a missing ID token is TOKEN_REJECTED:
+//                                the access token is verified first, so its
+//                                refusals report first)
 //   TOKEN_REJECTED               the access token failed verification or
 //                                was issued to another client; or the ID
 //                                token was missing, failed verification, or
 //                                names another `sub`
-//   ADMISSION_SCOPE_NOT_GRANTED  the token is valid but lacks the admission
-//                                scope: the user unticked it at consent, or
-//                                the client's policy does not allow it
+//   ADMISSION_SCOPE_NOT_GRANTED  the access token is valid but lacks the
+//                                admission scope: the user unticked it at
+//                                consent, or the client's policy does not
+//                                allow it
 //
 // What happens after a verified identity -- the resolver's refusal, a store
 // outage, a resolver bug -- is SignetDecision's, with its own exceptions. A

@@ -44,9 +44,13 @@ export declare abstract class SignetLoginStrategyBase<
 // The login (authorization code + PKCE) strategy for one entry. Subclass it,
 // implement `resolve` -- the SignetPrincipalResolver contract the Bearer
 // channel uses, plus a second argument: the verified ID token's claims,
-// which the Bearer channel never has (the address of an `email` scope is
-// there). A resolver service injected into both strategies can still serve
-// both, each delegating to it. Register the subclass as a provider next to
+// which the Bearer channel never has (with the `email` scope, the user's
+// address is there). So only a resolver keyed by `sub` (or another
+// access-token claim) serves both channels as it is; one that needs the ID
+// token's `email` should record `sub` → email at web sign-in and look the
+// user up by `sub` on the Bearer channel, as Signet's
+// `docs/resource-policy.md` (marxbiotech/signet-marxbio-tech) recommends.
+// Register the subclass as a provider next to
 // SignetIntegrationModule.forPassport:
 //
 //   @Injectable()
@@ -64,7 +68,8 @@ export declare abstract class SignetLoginStrategyBase<
 // so begin() and the callback cannot disagree about which entry they serve.
 //
 // Unlike the Bearer strategies, validate() THROWS: SignetLoginError with its
-// reason before an identity is verified, SignetDecision's exceptions after.
+// reason before the login is verified (both tokens), SignetDecision's
+// exceptions after.
 // "Failure is false" exists so Passport can try the next strategy and so
 // every refusal is one 401; a callback route has one strategy, and its UI
 // must tell "you cancelled" from "try again". Guard the callback with

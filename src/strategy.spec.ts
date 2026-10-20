@@ -114,6 +114,26 @@ describe('SignetBearerVerification', () => {
       expect(issuer.keys.calls()).toBe(fetchesBefore);
     });
 
+    // The two rules every token gets on top of jose's: exp present, sub
+    // non-empty.
+    it.each([
+      ['an empty sub', { sub: '' }, 'ERR_JWT_NO_SUB'],
+      ['no exp', { exp: undefined }, 'ERR_JWT_NO_EXP'],
+    ])('refuses a token with %s', async (_, overrides, reason) => {
+      const unusual = await issuer.sign({
+        aud: [FIXTURE_DEVELOPMENT_PROFILE.canonicalResource],
+        client_id: 'acme-web',
+        iss: ISSUER,
+        scp: ['acme:access'],
+        sub: 'example-user-123',
+        ...overrides,
+      });
+      expect(await build('true').verifyToken(unusual)).toEqual({
+        ok: false,
+        reason,
+      });
+    });
+
     it.each([
       ['a valid token', 'true', true],
       ['a refused token', 'true', false],
@@ -126,6 +146,24 @@ describe('SignetBearerVerification', () => {
         expectNoLines();
       },
     );
+  });
+
+  describe('verifyIdToken', () => {
+    it('answers signet_disabled without fetching the JWKS when the flag is off', async () => {
+      const verification = build('false');
+      const fetchesBefore = issuer.keys.calls();
+      const idToken = await issuer.sign({
+        aud: ['acme-web'],
+        iss: ISSUER,
+        sub: 'example-user-123',
+      });
+      const result = await verification.verifyIdToken(idToken, 'acme-web');
+      expect(result).toEqual({
+        ok: false,
+        reason: SignetBearerRejectionEnum.DISABLED,
+      });
+      expect(issuer.keys.calls()).toBe(fetchesBefore);
+    });
   });
 
   describe('verify', () => {
