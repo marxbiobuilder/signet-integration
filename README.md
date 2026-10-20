@@ -315,7 +315,7 @@ anyway).
 - Consumer credential dispatch between Bearer and a legacy channel.
 - Config validation of the env variables (see above).
 - Beyond a verified identity in the login flow: sessions, logout, refresh, where to return to after login (`returnTo` is an open-redirect surface; the package accepts no URL from a request).
-- Confidential clients (`client_secret_*`) and ID-token / nonce validation: the login flow is a public client with PKCE, and the identity comes from the access token.
+- Confidential clients (`client_secret_*`), nonce, and `/userinfo`: the login flow is a public client with PKCE, the identity comes from the access token, and the ID token (verified, see above) is enough for the user's email.
 
 ## Rules a consumer relies on
 
