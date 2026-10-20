@@ -7,6 +7,14 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-beta.1] - 2026-10-20
+
+預覽版，發佈在 npm dist-tag `beta`（`pnpm add @marxbiotech/signet-integration@beta`），
+`latest` 仍是 0.2.0。相對於 `0.3.0-beta.0`，登入流程也驗證 ID token，login
+strategy 的 `resolve` 多了第二個參數 `login`（見下方 Changed）；網頁登入的
+email 改從 ID token 取得。login flow 還沒和真實的 Signet 接過，0.3.0 之前 API
+仍可能再改。
+
 ### Added
 
 - `SignetBearerVerification.verifyToken(token)`：驗證不是從 `Authorization`
@@ -161,7 +169,8 @@ principal 由 Passport 掛到 `request.user`；套件提供 helper 讓 401／403
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0-beta.1...HEAD
+[0.3.0-beta.1]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...v0.3.0-beta.1
 [0.2.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/marxbiobuilder/signet-integration/releases/tag/v0.1.1
