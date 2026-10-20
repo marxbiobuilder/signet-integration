@@ -1,7 +1,7 @@
 import { Logger, type LogLevel } from '@nestjs/common';
-import { type ConfigService } from '@nestjs/config';
 import { type Request } from 'express';
 
+import { configOf } from './__spec__/fake-config';
 import {
   SignetBearerRejectionEnum,
   SignetBearerVerification,
@@ -13,16 +13,6 @@ import {
 import { startTestIssuer, type TestIssuer } from './testing/signet-token';
 
 const ISSUER = 'https://iss.strategy-spec.invalid';
-
-function configOf(env: Record<string, string>): ConfigService {
-  return {
-    get: (key: string, fallback?: unknown) => env[key] ?? fallback,
-    getOrThrow: (key: string) => {
-      if (env[key] === undefined) throw new Error(`${key} missing`);
-      return env[key];
-    },
-  } as unknown as ConfigService;
-}
 
 function requestOf(authorization?: string): Request {
   return {

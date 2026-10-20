@@ -46,12 +46,18 @@ export type SignetBearerRejection =
 // chain, and Nest turns a thrown validate() into error(). A throw would also
 // replace the guard's uniform 401 with whatever the exception said. Only a
 // defect in this process still throws (see JwtVerifier), so it surfaces as a
-// 500 rather than as a bad token.
+// 500 rather than as a bad token. (SignetLoginStrategy is the deliberate
+// exception: a login callback has one strategy and must hand its UI a
+// reason, so it throws SignetLoginError -- see login-strategy.ts.)
 //
 // The log line carries the reason and the source address and NOTHING derived
 // from the token: no fingerprint, no sub.
 export class SignetBearerVerification {
   private readonly verifier: JwtVerifier | null;
+  // The configured issuer, or null with the flag off. Read once, here, so a
+  // caller that also talks to the issuer (the login flow's discovery) uses
+  // the very value the verifier checks `iss` against.
+  readonly issuer: string | null;
 
   constructor(
     configService: ConfigService,
@@ -66,11 +72,13 @@ export class SignetBearerVerification {
     );
     if (config.signetEnabled) {
       this.verifier = new JwtVerifier(config.jwt);
+      this.issuer = config.jwt.issuer;
       this.logger.log(
         `signet jwt verification loaded: iss=${config.jwt.issuer} aud=${config.jwt.audience}`,
       );
     } else {
       this.verifier = null;
+      this.issuer = null;
     }
   }
 

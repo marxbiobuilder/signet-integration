@@ -1,0 +1,127 @@
+import {
+  fetchJson,
+  type JsonResponse,
+  LoginTransportError,
+} from './login-http';
+
+// The issuer's two endpoints the login flow calls, read from its OpenID
+// Provider metadata on first use and kept for the life of the process.
+//
+// Checks: the document's `issuer` is the configured one verbatim (RFC 8414
+// §3.3 -- a document for another issuer is a mix-up, not a typo to
+// tolerate), and both endpoints are https outside development. A failure is
+// not cached: the next login tries again.
+//
+// Design Decision: a success IS cached for good, with no TTL. Signet's
+// resource-server contract (docs/resource-server-contract.md in
+// marxbiotech/signet-marxbio-tech) makes a change of the issuer or the JWKS
+// address a breaking change announced to every resource server in advance.
+// It says nothing of the authorization and token endpoints; that they do
+// not move unannounced either is an assumption drawn from it, not a
+// promise. If one moves anyway, every login fails -- discovery_failed, or
+// token_exchange_failed detail=status_404 -- until the process restarts and
+// refetches. A TTL would add a refetch path to get wrong for a change
+// expected to be announced; a restart is the documented remedy.
+
+export interface LoginEndpoints {
+  readonly authorizationEndpoint: string;
+  readonly tokenEndpoint: string;
+}
+
+// Why discovery failed, for the log line. Never the response body.
+export class LoginDiscoveryError extends Error {
+  constructor(readonly detail: string) {
+    super(`signet discovery failed: ${detail}`);
+    this.name = 'LoginDiscoveryError';
+  }
+}
+
+// OpenID Connect Discovery §4: the well-known path is appended to the issuer
+// with any trailing slash removed first.
+export function discoveryUrl(issuer: string): string {
+  return `${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+}
+
+// What is wrong with an issuer as the place to fetch discovery from, or
+// undefined. Checked at construction by the login flow: an issuer that is
+// not an http(s) URL -- a missing scheme, say, which `localhost:8080` parses
+// as -- would otherwise fail every login as a "transport" error
+// (TypeError:ERR_INVALID_URL) after a clean boot.
+export function issuerProblem(issuer: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(discoveryUrl(issuer));
+  } catch {
+    return 'is not a URL';
+  }
+  return url.protocol === 'https:' || url.protocol === 'http:'
+    ? undefined
+    : 'is not an http(s) URL';
+}
+
+export class LoginDiscovery {
+  private pending: Promise<LoginEndpoints> | undefined;
+
+  constructor(
+    private readonly issuer: string,
+    private readonly requireHttps: boolean,
+    private readonly timeoutMs: number,
+  ) {}
+
+  // Rejects with LoginDiscoveryError for every failure on the issuer's side;
+  // any other rejection is a defect in this process.
+  endpoints(): Promise<LoginEndpoints> {
+    // One fetch in flight however many logins start at once; dropped on
+    // failure so the next call refetches.
+    this.pending ??= this.fetch().catch((error: unknown) => {
+      this.pending = undefined;
+      throw error;
+    });
+    return this.pending;
+  }
+
+  private async fetch(): Promise<LoginEndpoints> {
+    let response: JsonResponse;
+    try {
+      response = await fetchJson(discoveryUrl(this.issuer), {}, this.timeoutMs);
+    } catch (error) {
+      if (error instanceof LoginTransportError) {
+        throw new LoginDiscoveryError(error.detail);
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      throw new LoginDiscoveryError(`status_${response.status}`);
+    }
+    if (!response.json) throw new LoginDiscoveryError('body_not_json');
+    const { authorization_endpoint, issuer, token_endpoint } = (response.body ??
+      {}) as Record<string, unknown>;
+    if (issuer !== this.issuer) {
+      throw new LoginDiscoveryError('issuer_mismatch');
+    }
+    return {
+      authorizationEndpoint: this.endpoint(
+        authorization_endpoint,
+        'authorization_endpoint',
+      ),
+      tokenEndpoint: this.endpoint(token_endpoint, 'token_endpoint'),
+    };
+  }
+
+  private endpoint(value: unknown, field: string): string {
+    if (typeof value !== 'string') {
+      throw new LoginDiscoveryError(`${field}_missing`);
+    }
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new LoginDiscoveryError(`${field}_invalid`);
+    }
+    const allowed =
+      url.protocol === 'https:' ||
+      (url.protocol === 'http:' && !this.requireHttps);
+    if (!allowed) throw new LoginDiscoveryError(`${field}_not_https`);
+    return value;
+  }
+}

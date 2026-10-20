@@ -36,6 +36,16 @@ export {
   type VerifiedSignetIdentity,
   type VerifyResult,
 } from './jwt-verifier';
+export { type SignetLoginEntry } from './login-entry';
+export {
+  SignetLoginError,
+  type SignetLoginFailure,
+  SignetLoginFailureEnum,
+} from './login-error';
+export {
+  SignetLoginStrategy,
+  type SignetLoginStrategyBase,
+} from './login-strategy';
 export {
   type ResolverProvider,
   SignetIntegrationModule,
