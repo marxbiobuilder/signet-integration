@@ -37,10 +37,11 @@ export async function startTestIssuer(): Promise<TestIssuer> {
     keys: [{ ...(await exportJWK(pair.publicKey)), alg: 'ES256', kid: 'k1' }],
   };
   const keys = await startJwksServer(jwks);
+  // Five minutes unless the payload names its own `exp` (an expired token).
   const sign = (payload: JWTPayload, header: { typ?: string } = {}) =>
     new SignJWT(payload)
       .setProtectedHeader({ alg: 'ES256', kid: 'k1', ...header })
-      .setExpirationTime('5m')
+      .setExpirationTime(payload.exp ?? '5m')
       .sign(signingKey);
   return {
     close: () => keys.close(),

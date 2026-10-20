@@ -139,6 +139,46 @@ describe('startTestAuthorizationServer', () => {
     });
   });
 
+  const payloadOf = (token: unknown) =>
+    JSON.parse(
+      Buffer.from(String(token).split('.')[1], 'base64url').toString(),
+    ) as Record<string, unknown>;
+
+  it('adds the ID token Signet would when openid was granted: aud the client, the same sub, the grant’s idTokenClaims', async () => {
+    const code = codeFrom(
+      server.authorize(authorizationUrl(), {
+        claims: { erp: 'on-the-access-token' },
+        idTokenClaims: { email: 'someone@example.com', email_verified: true },
+        subject: 'person-1',
+      }),
+    );
+    const { body } = await exchange(code);
+    const idToken = payloadOf(body.id_token);
+    expect(idToken).toMatchObject({
+      aud: CLIENT,
+      email: 'someone@example.com',
+      email_verified: true,
+      iss: server.issuer,
+      sub: 'person-1',
+    });
+    expect(idToken).not.toHaveProperty('erp');
+    expect(payloadOf(body.access_token)).not.toHaveProperty('email');
+  });
+
+  it('issues no ID token when openid was not granted', async () => {
+    const code = codeFrom(
+      server.authorize(authorizationUrl(), { scopes: ['acme:access'] }),
+    );
+    const { body } = await exchange(code);
+    expect(typeof body.access_token).toBe('string');
+    expect(body).not.toHaveProperty('id_token');
+  });
+
+  it('signs with the payload’s own exp when it names one', async () => {
+    const exp = Math.floor(Date.now() / 1000) - 60;
+    expect(payloadOf(await server.sign({ exp, sub: 'x' })).exp).toBe(exp);
+  });
+
   describe('scripted token endpoint', () => {
     const post = () =>
       fetch(`${server.issuer}/oauth2/token`, {

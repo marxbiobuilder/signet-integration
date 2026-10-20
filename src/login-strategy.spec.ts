@@ -26,6 +26,7 @@ import {
 import { BearerChallengeFilter } from './bearer-challenge.filter';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { SignetLoginError } from './login-error';
+import { type SignetLoginContext } from './login-flow';
 import { SignetLoginStrategy } from './login-strategy';
 import { SignetIntegrationModule } from './module';
 import { type PrincipalResolution } from './principal-resolver';
@@ -46,6 +47,7 @@ const ENTRY = LOGIN_ENTRY;
 const CALLBACK_PATH = LOGIN_CALLBACK_PATH;
 
 interface Principal {
+  readonly email: unknown;
   readonly name: string;
 }
 
@@ -53,13 +55,17 @@ interface Principal {
 class AcmeLogin extends SignetLoginStrategy<Principal>(ENTRY) {
   resolve(
     identity: VerifiedSignetIdentity,
+    { idTokenClaims }: SignetLoginContext,
   ): Promise<PrincipalResolution<Principal>> {
     if (identity.subject !== 'person-1') {
       return Promise.resolve({ ok: false, reason: 'unknown_subject' });
     }
     return Promise.resolve({
       ok: true,
-      principal: { name: `acme:${identity.subject}` },
+      principal: {
+        email: idTokenClaims.email,
+        name: `acme:${identity.subject}`,
+      },
     });
   }
 }
@@ -234,11 +240,14 @@ describe('SignetLoginStrategy', () => {
 
     it('logs a user in: begin redirects to the IdP, the callback hands the resolved principal to the handler', async () => {
       const response = await login((url) =>
-        server.authorize(url, { subject: 'person-1' }),
+        server.authorize(url, {
+          idTokenClaims: { email: 'person-1@example.com' },
+          subject: 'person-1',
+        }),
       );
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
-        user: { name: 'acme:person-1' },
+        user: { email: 'person-1@example.com', name: 'acme:person-1' },
       });
       expect(response.headers.getSetCookie()).toEqual([
         `signet_login.acme-login=; Path=${CALLBACK_PATH}; Max-Age=0; HttpOnly; SameSite=Lax`,

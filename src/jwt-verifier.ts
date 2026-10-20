@@ -56,6 +56,7 @@ export interface VerifiedSignetIdentity {
 
 // This package's own rejection codes, alongside the ERR_* codes jose throws.
 export const JwtRejectionEnum = {
+  AZP_MISMATCH: 'ERR_JWT_AZP_MISMATCH',
   BAD_SCOPE: 'ERR_JWT_BAD_SCOPE',
   JWKS_PARSE: 'ERR_JOSE_GENERIC:jwks_parse',
   JWKS_STATUS: 'ERR_JOSE_GENERIC:jwks_status',
@@ -71,6 +72,10 @@ export type JwtRejection =
 export type VerifyResult =
   | { ok: false; reason: string }
   | { ok: true; identity: VerifiedSignetIdentity };
+
+// A verified OIDC ID token's payload, frozen. `reason` as in VerifyResult.
+export type IdTokenVerifyResult =
+  { claims: Readonly<JWTPayload>; ok: true } | { ok: false; reason: string };
 
 // jose reports both JWKS transport failures -- a non-200 status and an
 // unparseable body -- as JOSEError with the same ERR_JOSE_GENERIC code; only
@@ -132,14 +137,78 @@ export class JwtVerifier {
   }
 
   async verify(token: string): Promise<VerifyResult> {
+    // audience accepts a string or an array containing the expected value;
+    // the issuer's fixed client policy is what keeps a token single-audience.
+    const checked = await this.signedPayload(token, this.settings.audience);
+    if (!checked.ok) return checked;
+    const { payload, subject } = checked;
+    // RFC 9068 §2.2 makes client_id a required claim of a JWT access token
+    // and Signet issues it on every token, dynamically registered clients
+    // included -- so a token without one is not the shape this contract
+    // accepts, and its absence is an access-token contract failure (401). It
+    // is NOT a lookup key: the guard logs it as the software that presented
+    // the credential.
+    if (typeof payload.client_id !== 'string' || payload.client_id === '') {
+      return { ok: false, reason: JwtRejectionEnum.NO_CLIENT_ID };
+    }
+    const scopes = scopesOf(payload);
+    if (scopes === null) {
+      return { ok: false, reason: JwtRejectionEnum.BAD_SCOPE };
+    }
+    // iat is deliberately not required and no maxTokenAge is applied.
+    // Business roles the token might carry are ignored here: authorization
+    // is the consumer's resolver's alone.
+    return {
+      identity: {
+        claims: Object.freeze(payload),
+        clientId: payload.client_id,
+        issuer: this.settings.issuer,
+        scopes,
+        subject,
+      },
+      ok: true,
+    };
+  }
+
+  // Verifies an OIDC ID token for `clientId` (OIDC Core §3.1.3.7): the same
+  // keys, algorithms, issuer and clock tolerance as an access token, its
+  // `aud` containing the client instead of the resource. No nonce: the login
+  // flow is authorization code + PKCE and the token comes straight from the
+  // token endpoint over TLS, where §3.1.2.1 makes it optional. Matching its
+  // `sub` to the access token's is the caller's.
+  async verifyIdToken(
+    token: string,
+    clientId: string,
+  ): Promise<IdTokenVerifyResult> {
+    const checked = await this.signedPayload(token, clientId);
+    if (!checked.ok) return checked;
+    const { payload } = checked;
+    // §3.1.3.7 step 4: a token for several audiences names the one it was
+    // issued to.
+    if (
+      Array.isArray(payload.aud) &&
+      payload.aud.length > 1 &&
+      payload.azp !== clientId
+    ) {
+      return { ok: false, reason: JwtRejectionEnum.AZP_MISMATCH };
+    }
+    return { claims: Object.freeze(payload), ok: true };
+  }
+
+  // The checks every token gets: signature, issuer, audience, exp / nbf
+  // (jose's), then exp present and sub non-empty (this file's).
+  private async signedPayload(
+    token: string,
+    audience: string,
+  ): Promise<
+    | { ok: false; reason: string }
+    | { ok: true; payload: JWTPayload; subject: string }
+  > {
     let payload: JWTPayload;
     try {
-      // issuer / audience / exp / nbf are jose's. audience accepts a string
-      // or an array containing the expected value; the issuer's fixed client
-      // policy is what keeps a token single-audience.
       ({ payload } = await jwtVerify(token, this.keys, {
         algorithms: ASYMMETRIC_ALGORITHMS,
-        audience: this.settings.audience,
+        audience,
         clockTolerance: this.settings.clockToleranceS,
         issuer: this.settings.issuer,
       }));
@@ -165,34 +234,10 @@ export class JwtVerifier {
     if (typeof payload.exp !== 'number') {
       return { ok: false, reason: JwtRejectionEnum.NO_EXP };
     }
-    if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
+    const { sub } = payload;
+    if (typeof sub !== 'string' || sub.length === 0) {
       return { ok: false, reason: JwtRejectionEnum.NO_SUB };
     }
-    // RFC 9068 §2.2 makes client_id a required claim of a JWT access token
-    // and Signet issues it on every token, dynamically registered clients
-    // included -- so a token without one is not the shape this contract
-    // accepts, and its absence is an access-token contract failure (401). It
-    // is NOT a lookup key: the guard logs it as the software that presented
-    // the credential.
-    if (typeof payload.client_id !== 'string' || payload.client_id === '') {
-      return { ok: false, reason: JwtRejectionEnum.NO_CLIENT_ID };
-    }
-    const scopes = scopesOf(payload);
-    if (scopes === null) {
-      return { ok: false, reason: JwtRejectionEnum.BAD_SCOPE };
-    }
-    // iat is deliberately not required and no maxTokenAge is applied.
-    // Business roles the token might carry are ignored here: authorization
-    // is the consumer's resolver's alone.
-    return {
-      identity: {
-        claims: Object.freeze(payload),
-        clientId: payload.client_id,
-        issuer: this.settings.issuer,
-        scopes,
-        subject: payload.sub,
-      },
-      ok: true,
-    };
+    return { ok: true, payload, subject: sub };
   }
 }

@@ -18,8 +18,10 @@ export interface SignetLoginEntry<E extends string = string> {
     Record<E | typeof DEVELOPMENT_ENVIRONMENT, string>
   >;
   // Requested scopes; the admission scope is always added. Default
-  // ['openid']. `offline_access` buys nothing here: the package keeps no
-  // refresh token.
+  // ['openid']; a list given here must include `openid`, since the flow
+  // verifies the ID token and hands its claims to the resolver. Add `email`
+  // for the user's address on the ID token. `offline_access` buys nothing
+  // here: the package keeps no refresh token.
   readonly scopes?: readonly string[];
 }
 
@@ -58,6 +60,13 @@ export function validateLoginEntry(entry: SignetLoginEntry): SignetLoginEntry {
         `invalid SignetLoginEntry ${name}: scope ${JSON.stringify(scope)} is not a scope token (RFC 6749 §3.3)`,
       );
     }
+  }
+  // Without `openid` there is no ID token, and the resolver's `login`
+  // argument would be a promise the flow cannot keep.
+  if (entry.scopes !== undefined && !entry.scopes.includes('openid')) {
+    throw new Error(
+      `invalid SignetLoginEntry ${name}: scopes must include openid`,
+    );
   }
   for (const [environment, raw] of Object.entries(entry.redirectUris)) {
     checkRedirectUri(name, environment, raw);

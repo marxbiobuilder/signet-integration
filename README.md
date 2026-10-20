@@ -114,11 +114,12 @@ consumer with several credential channels and its own dispatcher wants.
 
 For a web app that signs people in with Signet and then runs on its own
 session: the browser goes through the authorization-code flow, the package
-exchanges the code, verifies the **access token** and runs your resolver --
-the same `SignetPrincipalResolver` contract as above. A class cannot extend
-both strategies, so to share one resolver between the channels, inject a
-resolver service into each strategy and delegate `resolve` to it. What you
-do with the principal (issue a session cookie, redirect) is yours.
+exchanges the code, verifies the **access token** and the **ID token**, and
+runs your resolver -- the `SignetPrincipalResolver` contract as above, plus a
+second argument carrying the ID token's claims. A class cannot extend both
+strategies, so to share one resolver between the channels, inject a resolver
+service into each strategy and delegate `resolve` to it. What you do with the
+principal (issue a session cookie, redirect) is yours.
 
 ```ts
 export const WEB_LOGIN = {
@@ -129,13 +130,17 @@ export const WEB_LOGIN = {
     staging: 'https://app.staging.example.com/auth/signet/callback',
     development: 'http://localhost:3000/auth/signet/callback',
   },
+  scopes: ['openid', 'email'], // must include openid; the admission scope is added
 } as const satisfies SignetLoginEntry<'production' | 'staging'>;
 
 @Injectable()
 export class WebSignetLogin extends SignetLoginStrategy<User>(WEB_LOGIN) { // name <User>: it is not inferred
   constructor(private readonly users: UsersService) { super(); }
-  async resolve(identity: VerifiedSignetIdentity): Promise<PrincipalResolution<User>> {
-    const user = await this.users.findByEmail(identity.claims.email as string);
+  async resolve(
+    identity: VerifiedSignetIdentity,       // from the access token, as on the Bearer channel
+    { idTokenClaims }: SignetLoginContext,  // from the ID token
+  ): Promise<PrincipalResolution<User>> {
+    const user = await this.users.findByEmail(idTokenClaims.email as string);
     return user ? { ok: true, principal: user } : { ok: false, reason: 'no_account' };
   }
 }
@@ -218,12 +223,23 @@ What to know:
   replica with the same `stateSecret` opens a state another sealed: no
   sticky sessions needed.
 - The authorization request carries exactly one `resource`, the profile's
-  canonical resource, so the token's `aud` is what the verifier expects.
-  Claims your resolver reads must be in the access token, and which claims
-  Signet puts there is its policy's business, documented in Signet's
-  resource-server contract (`docs/resource-server-contract.md` in
-  marxbiotech/signet-marxbio-tech) -- `email`, for one, only for a resource
-  marked `erp: true`.
+  canonical resource, so the access token's `aud` is what the verifier
+  expects. Which claims Signet puts on the access token is its policy's
+  business, documented in Signet's resource-server contract
+  (`docs/resource-server-contract.md` in marxbiotech/signet-marxbio-tech) --
+  `email`, for one, only for a resource marked `erp: true`.
+- **Take the user's email from the ID token, not the access token.** Ask for
+  the `email` scope (`scopes: ['openid', 'email']`): Signet then puts
+  `email`, `email_verified: true` and `hd` on the ID token, and its consent
+  screen makes `email` mandatory (Signet's `docs/resource-policy.md`). The
+  ID token is checked against the same keys, algorithms, issuer and clock
+  tolerance as the access token, its `aud` must include the client id (with
+  several audiences, `azp` must be the client id), and its `sub` must equal
+  the access token's. No nonce: the code is bound to the browser by PKCE and
+  the ID token comes straight from the token endpoint. A missing or failing
+  ID token is `TOKEN_REJECTED`, its detail starting `id_token`
+  (`id_token_missing`, `id_token_subject_mismatch`, `id_token:<jose code>`).
+  `scopes` without `openid` is refused when the strategy class is created.
 - The issuer's discovery document is fetched on the first login and kept
   until the process restarts. Signet announces a change of its issuer or
   JWKS address in advance (same contract); if its authorization or token

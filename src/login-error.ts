@@ -19,8 +19,10 @@ import { UnauthorizedException } from '@nestjs/common';
 //                                or did not pass its checks
 //   TOKEN_EXCHANGE_FAILED        the token endpoint refused, failed or did
 //                                not answer in time, or returned no token
-//   TOKEN_REJECTED               the access token failed verification, or
-//                                was issued to another client
+//   TOKEN_REJECTED               the access token failed verification or
+//                                was issued to another client; or the ID
+//                                token was missing, failed verification, or
+//                                names another `sub`
 //   ADMISSION_SCOPE_NOT_GRANTED  the token is valid but lacks the admission
 //                                scope: the user unticked it at consent, or
 //                                the client's policy does not allow it

@@ -24,6 +24,8 @@ import { startTestIssuer } from './signet-token';
 // Tokens have the shape Signet issues: `aud` the single requested resource
 // (no `resource` in the request: no `aud`, like a client with several
 // audiences that did not pick one), scopes in `scp`, `client_id` present.
+// When `openid` was granted the response carries an `id_token` too: `aud`
+// the client, the access token's `sub`, and the grant's `idTokenClaims`.
 // The issuer is this server's origin, which is also what discovery reports.
 
 export interface TestAuthorizationServerOptions {
@@ -33,9 +35,11 @@ export interface TestAuthorizationServerOptions {
 }
 
 // What the user granted. Defaults: subject `test-user`, the requested
-// scopes, no extra claims.
+// scopes, no extra claims on either token. `claims` go on the access token,
+// `idTokenClaims` on the ID token (Signet's `email`, `email_verified`).
 export interface TestGrant {
   readonly claims?: JWTPayload;
+  readonly idTokenClaims?: JWTPayload;
   readonly scopes?: readonly string[];
   readonly subject?: string;
 }
@@ -184,7 +188,7 @@ export async function startTestAuthorizationServer(
     ) {
       return json(response, 400, { error: 'invalid_grant' });
     }
-    const { claims, scopes, subject } = issued.grant;
+    const { claims, idTokenClaims, scopes, subject } = issued.grant;
     const accessToken = await keys.sign({
       ...claims,
       ...(issued.resource === undefined ? {} : { aud: [issued.resource] }),
@@ -193,9 +197,18 @@ export async function startTestAuthorizationServer(
       scp: [...scopes],
       sub: subject,
     });
+    const idToken = scopes.includes('openid')
+      ? await keys.sign({
+          ...idTokenClaims,
+          aud: options.clientId,
+          iss: issuer,
+          sub: subject,
+        })
+      : undefined;
     json(response, 200, {
       access_token: accessToken,
       expires_in: 300,
+      ...(idToken === undefined ? {} : { id_token: idToken }),
       token_type: 'bearer',
     });
   };
@@ -283,6 +296,7 @@ export async function startTestAuthorizationServer(
         challenge: request.challenge,
         grant: {
           claims: grant.claims ?? {},
+          idTokenClaims: grant.idTokenClaims ?? {},
           scopes: grant.scopes ?? request.scopes,
           subject: grant.subject ?? 'test-user',
         },

@@ -7,6 +7,7 @@ import { Strategy } from 'passport-custom';
 import { readSignetAuthConfig } from './config';
 import { SignetDeploymentProfileService } from './deployment-profile';
 import {
+  type IdTokenVerifyResult,
   JwtVerifier,
   type VerifiedSignetIdentity,
   type VerifyResult,
@@ -38,6 +39,9 @@ export type SignetBearerRejection =
 //                       LOGGED `false`
 //   verifyToken(token)  a token from anywhere else → a VerifyResult, logged by
 //                       no one but the caller
+//   verifyIdToken(token, clientId)
+//                       the login flow's ID token, against the same keys →
+//                       an IdTokenVerifyResult, logged by no one but the caller
 //
 // SignetJwtStrategy and SignetPrincipalStrategy both hold one.
 //
@@ -125,6 +129,20 @@ export class SignetBearerVerification {
       return { ok: false, reason: SignetBearerRejectionEnum.DISABLED };
     }
     return this.verifier.verify(token);
+  }
+
+  // An OIDC ID token issued to `clientId`, checked against the same keys,
+  // issuer and clock tolerance as an access token (JwtVerifier.verifyIdToken).
+  // The Bearer channel never sees one; it is here for the login flow, which
+  // holds this class, and a direct caller owes what verifyToken's does.
+  async verifyIdToken(
+    token: string,
+    clientId: string,
+  ): Promise<IdTokenVerifyResult> {
+    if (this.verifier === null) {
+      return { ok: false, reason: SignetBearerRejectionEnum.DISABLED };
+    }
+    return this.verifier.verifyIdToken(token, clientId);
   }
 
   // Every false that verify() returns goes through here, so the header path
