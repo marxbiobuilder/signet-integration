@@ -8,28 +8,28 @@ import { SignetDecision } from './decision';
 import { SignetDeploymentProfileService } from './deployment-profile';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { type SignetLoginEntry, validateLoginEntry } from './login-entry';
-import { SignetLoginFlow } from './login-flow';
+import { type SignetLoginContext, SignetLoginFlow } from './login-flow';
 import {
   SIGNET_INTEGRATION_OPTIONS,
   type SignetIntegrationOptions,
 } from './options';
-import {
-  type PrincipalResolution,
-  type SignetPrincipalResolver,
-} from './principal-resolver';
+import { type PrincipalResolution } from './principal-resolver';
 
 // The shape a SignetLoginStrategy(entry) subclass extends: the type the mixin
 // returns, declared here so the declaration files name it. There is no
 // runtime class by this name -- export it as a type only.
-export declare abstract class SignetLoginStrategyBase<P>
-  implements SignetPrincipalResolver<P>, OnModuleInit
-{
+export declare abstract class SignetLoginStrategyBase<
+  P,
+> implements OnModuleInit {
   // Public rather than protected: the declared shape and the mixin's class
   // are different declarations, and TypeScript matches protected members by
   // declaration.
   readonly logger: Logger;
+  // SignetPrincipalResolver's contract, with the login's ID token claims as
+  // a second argument.
   abstract resolve(
     identity: VerifiedSignetIdentity,
+    login: SignetLoginContext,
   ): Promise<PrincipalResolution<P>>;
   // Writes the state cookie and returns the authorization URL; the handler
   // redirects to it. Throws SignetLoginError (DISABLED, DISCOVERY_FAILED).
@@ -43,14 +43,20 @@ export declare abstract class SignetLoginStrategyBase<P>
 
 // The login (authorization code + PKCE) strategy for one entry. Subclass it,
 // implement `resolve` -- the SignetPrincipalResolver contract the Bearer
-// channel uses too, so a resolver service injected into both strategies can
-// serve both, each delegating `resolve` to it -- and register the subclass
-// as a provider next to SignetIntegrationModule.forPassport:
+// channel uses, plus a second argument: the verified ID token's claims,
+// which the Bearer channel never has (with the `email` scope, the user's
+// address is there). So only a resolver keyed by `sub` (or another
+// access-token claim) serves both channels as it is; one that needs the ID
+// token's `email` should record `sub` → email at web sign-in and look the
+// user up by `sub` on the Bearer channel, as Signet's
+// `docs/resource-policy.md` (marxbiotech/signet-marxbio-tech) recommends.
+// Register the subclass as a provider next to
+// SignetIntegrationModule.forPassport:
 //
 //   @Injectable()
 //   class WebSignetLogin extends SignetLoginStrategy<User>(WEB_LOGIN) {
 //     constructor(private readonly users: UsersService) { super(); }
-//     async resolve(identity) { ... }
+//     async resolve(identity, { idTokenClaims }) { ... }
 //   }
 //
 // Name the principal type: `P` appears only in what the mixin returns, so
@@ -62,7 +68,8 @@ export declare abstract class SignetLoginStrategyBase<P>
 // so begin() and the callback cannot disagree about which entry they serve.
 //
 // Unlike the Bearer strategies, validate() THROWS: SignetLoginError with its
-// reason before an identity is verified, SignetDecision's exceptions after.
+// reason before the login is verified (both tokens), SignetDecision's
+// exceptions after.
 // "Failure is false" exists so Passport can try the next strategy and so
 // every refusal is one 401; a callback route has one strategy, and its UI
 // must tell "you cancelled" from "try again". Guard the callback with
@@ -77,7 +84,7 @@ export function SignetLoginStrategy<P>(
   @Injectable()
   abstract class SignetLogin
     extends PassportStrategy(Strategy, frozen.name)
-    implements SignetPrincipalResolver<P>, OnModuleInit
+    implements OnModuleInit
   {
     readonly logger = new Logger(this.constructor.name);
 
@@ -93,6 +100,7 @@ export function SignetLoginStrategy<P>(
 
     abstract resolve(
       identity: VerifiedSignetIdentity,
+      login: SignetLoginContext,
     ): Promise<PrincipalResolution<P>>;
 
     // Property injection lands after construction, so the flow -- its
@@ -106,11 +114,12 @@ export function SignetLoginStrategy<P>(
     }
 
     async validate(request: Request): Promise<P> {
-      const identity = await this.ready().complete(request);
-      return this.decision.decide(identity, this, {
-        logger: this.logger,
-        source: request.ip,
-      });
+      const { identity, login } = await this.ready().complete(request);
+      return this.decision.decide(
+        identity,
+        { resolve: (verified) => this.resolve(verified, login) },
+        { logger: this.logger, source: request.ip },
+      );
     }
 
     // Lazily as well: a subclass that overrides onModuleInit without calling

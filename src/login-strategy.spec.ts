@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Controller,
   type ExecutionContext,
   Get,
@@ -26,9 +27,13 @@ import {
 import { BearerChallengeFilter } from './bearer-challenge.filter';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
 import { SignetLoginError } from './login-error';
+import { type SignetLoginContext } from './login-flow';
 import { SignetLoginStrategy } from './login-strategy';
 import { SignetIntegrationModule } from './module';
-import { type PrincipalResolution } from './principal-resolver';
+import {
+  type PrincipalResolution,
+  PrincipalStoreUnavailableError,
+} from './principal-resolver';
 import {
   startTestAuthorizationServer,
   type TestAuthorizationServer,
@@ -46,21 +51,42 @@ const ENTRY = LOGIN_ENTRY;
 const CALLBACK_PATH = LOGIN_CALLBACK_PATH;
 
 interface Principal {
+  readonly email: unknown;
   readonly name: string;
 }
 
+// The subject picks what the resolver does: person-1 resolves; store-down,
+// conflict and broken throw what a consumer's store or rules might; anyone
+// else is refused. The realm is read through `this`, so a strategy that
+// called resolve unbound would fail the happy path.
 @Injectable()
 class AcmeLogin extends SignetLoginStrategy<Principal>(ENTRY) {
+  private readonly realm = 'acme';
+
   resolve(
     identity: VerifiedSignetIdentity,
+    { idTokenClaims }: SignetLoginContext,
   ): Promise<PrincipalResolution<Principal>> {
-    if (identity.subject !== 'person-1') {
-      return Promise.resolve({ ok: false, reason: 'unknown_subject' });
+    switch (identity.subject) {
+      case 'person-1':
+        return Promise.resolve({
+          ok: true,
+          principal: {
+            email: idTokenClaims.email,
+            name: `${this.realm}:${identity.subject}`,
+          },
+        });
+      case 'store-down':
+        return Promise.reject(
+          new PrincipalStoreUnavailableError(new Error('ECONNREFUSED')),
+        );
+      case 'conflict':
+        return Promise.reject(new ConflictException('account merge pending'));
+      case 'broken':
+        return Promise.reject(new Error('resolver bug'));
+      default:
+        return Promise.resolve({ ok: false, reason: 'unknown_subject' });
     }
-    return Promise.resolve({
-      ok: true,
-      principal: { name: `acme:${identity.subject}` },
-    });
   }
 }
 
@@ -234,11 +260,14 @@ describe('SignetLoginStrategy', () => {
 
     it('logs a user in: begin redirects to the IdP, the callback hands the resolved principal to the handler', async () => {
       const response = await login((url) =>
-        server.authorize(url, { subject: 'person-1' }),
+        server.authorize(url, {
+          idTokenClaims: { email: 'person-1@example.com' },
+          subject: 'person-1',
+        }),
       );
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
-        user: { name: 'acme:person-1' },
+        user: { email: 'person-1@example.com', name: 'acme:person-1' },
       });
       expect(response.headers.getSetCookie()).toEqual([
         `signet_login.acme-login=; Path=${CALLBACK_PATH}; Max-Age=0; HttpOnly; SameSite=Lax`,
@@ -256,6 +285,33 @@ describe('SignetLoginStrategy', () => {
         server.authorize(url, { subject: 'stranger' }),
       );
       expect(response.status).toBe(403);
+    });
+
+    // What SignetDecision makes of a resolver that throws, through the
+    // callback guard's `if (error) throw error` -- the Bearer channel's
+    // classification, on the login path.
+    it.each([
+      [
+        'PrincipalStoreUnavailableError as a 503',
+        'store-down',
+        { message: 'authorization store unavailable', statusCode: 503 },
+      ],
+      [
+        'an HttpException with its own status',
+        'conflict',
+        { message: 'account merge pending', statusCode: 409 },
+      ],
+      [
+        'any other error as a 500',
+        'broken',
+        { message: 'Internal server error', statusCode: 500 },
+      ],
+    ])('answers a resolver that throws %s', async (_, subject, body) => {
+      // The decision's and Nest's error lines, expected here.
+      jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const response = await login((url) => server.authorize(url, { subject }));
+      expect(response.status).toBe(body.statusCode);
+      expect(await response.json()).toMatchObject(body);
     });
 
     it('answers an unhandled login failure 401 WITHOUT a Bearer challenge', async () => {

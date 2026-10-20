@@ -1,6 +1,7 @@
 import { type Logger } from '@nestjs/common';
 import { type ConfigService } from '@nestjs/config';
 import { type Request, type Response as ExpressResponse } from 'express';
+import { type JWTPayload } from 'jose';
 
 import { type SignetDeploymentProfileService } from './deployment-profile';
 import { type VerifiedSignetIdentity } from './jwt-verifier';
@@ -66,6 +67,32 @@ interface LoginSettings {
   readonly key: Uint8Array;
 }
 
+// What the login adds to the access token's identity, for the resolver: the
+// verified ID token's claims, frozen. With `email` among the entry's scopes
+// Signet puts `email`, `email_verified` and `hd` here -- a web login's
+// address comes from here, not from the access token, which carries `email`
+// only for a resource Signet marks `erp: true`. The claims are typed as
+// jose's JWTPayload, so `email` is `unknown`: the resolver narrows it before
+// using it.
+export interface SignetLoginContext {
+  readonly idTokenClaims: Readonly<JWTPayload>;
+}
+
+// A completed login: the access token's identity, and the ID token's claims.
+export interface SignetLoginResult {
+  readonly identity: VerifiedSignetIdentity;
+  readonly login: SignetLoginContext;
+}
+
+// What the token endpoint answered with. A missing `id_token` does not fail
+// the exchange: the access token is verified first, so its refusals
+// (ADMISSION_SCOPE_NOT_GRANTED included) report first, and a missing ID
+// token is TOKEN_REJECTED.
+interface TokenResponse {
+  readonly accessToken: string;
+  readonly idToken: string | undefined;
+}
+
 // The state a callback answers, or which check failed, for the log line.
 type StateMatch =
   | { readonly detail: string; readonly ok: false }
@@ -73,14 +100,16 @@ type StateMatch =
 
 // The authorization-code + PKCE flow for one entry, as a public client:
 // begin() starts it, complete() turns the IdP's redirect back into a verified
-// identity. The admission scope is checked here (see verifiedIdentity());
-// what happens to the identity after that -- the consumer's resolver -- is
-// SignetDecision's, run by the strategy.
+// identity and ID token claims. The admission scope is checked here (see
+// verifiedIdentity()); what happens to the identity after that -- the
+// consumer's resolver -- is SignetDecision's, run by the strategy.
 //
 // The identity comes from the ACCESS token, verified by the same
-// SignetBearerVerification the Bearer channel uses: the claims a resolver
-// reads are the same access-token claims either way. No ID token, no
-// nonce, no refresh token is kept.
+// SignetBearerVerification the Bearer channel uses: `identity` means the
+// same access-token claims either way. The ID token is verified too
+// (validateLoginEntry guarantees the entry's scopes include `openid`) and
+// must name the same `sub`; its claims travel beside the identity, not in
+// it. No nonce (see JwtVerifier.verifyIdToken), and no token is kept.
 //
 // Every refusal throws SignetLoginError through reject(), which writes the
 // one rejection line. Nothing derived from the token, the code or the state
@@ -192,8 +221,8 @@ export class SignetLoginFlow {
   }
 
   // The callback: the state checked, the IdP's answer read, the code
-  // exchanged, the token verified.
-  async complete(request: Request): Promise<VerifiedSignetIdentity> {
+  // exchanged, the tokens verified.
+  async complete(request: Request): Promise<SignetLoginResult> {
     const settings = this.enabled(request);
     // Read, then cleared on the browser before any later check can fail
     // (only the enabled check runs first), so a browser never presents a
@@ -238,14 +267,25 @@ export class SignetLoginFlow {
     }
 
     const { tokenEndpoint } = await this.endpoints(settings, request);
-    const accessToken = await this.exchange(
+    const tokens = await this.exchange(
       settings,
       request,
       tokenEndpoint,
       code,
       match.state.verifier,
     );
-    return this.verifiedIdentity(settings, request, accessToken);
+    const identity = await this.verifiedIdentity(
+      settings,
+      request,
+      tokens.accessToken,
+    );
+    const idTokenClaims = await this.verifiedIdTokenClaims(
+      settings,
+      request,
+      tokens.idToken,
+      identity,
+    );
+    return { identity, login: { idTokenClaims } };
   }
 
   // The access token verified, then two checks the Bearer channel does not
@@ -283,6 +323,33 @@ export class SignetLoginFlow {
       );
     }
     return result.identity;
+  }
+
+  // The ID token, after the access token: refusals are TOKEN_REJECTED, the
+  // detail prefixed `id_token` so a log line says which token failed.
+  private async verifiedIdTokenClaims(
+    settings: LoginSettings,
+    request: Request,
+    idToken: string | undefined,
+    identity: VerifiedSignetIdentity,
+  ): Promise<Readonly<JWTPayload>> {
+    const fail = (detail: string) =>
+      this.reject(request, SignetLoginFailureEnum.TOKEN_REJECTED, detail);
+    // `openid` was asked for, and Signet's consent screen always keeps a
+    // requested `openid` (the user cannot untick it), so a missing ID token
+    // is the issuer's to explain, not the user's choice.
+    if (idToken === undefined) throw fail('id_token_missing');
+    const result = await this.verification.verifyIdToken(
+      idToken,
+      settings.clientId,
+    );
+    if (!result.ok) throw fail(`id_token:${result.reason}`);
+    // Not an OIDC rule: the two tokens reach one resolver, so they must be
+    // about one person, or a token from elsewhere could be spliced in.
+    if (result.claims.sub !== identity.subject) {
+      throw fail('id_token_subject_mismatch');
+    }
+    return result.claims;
   }
 
   private enabled(request: Request | undefined): LoginSettings {
@@ -357,7 +424,7 @@ export class SignetLoginFlow {
     tokenEndpoint: string,
     code: string,
     verifier: string,
-  ): Promise<string> {
+  ): Promise<TokenResponse> {
     const fail = (detail: string) =>
       this.reject(
         request,
@@ -396,7 +463,11 @@ export class SignetLoginFlow {
     if (typeof fields.access_token !== 'string' || fields.access_token === '') {
       throw fail('access_token_missing');
     }
-    return fields.access_token;
+    const idToken =
+      typeof fields.id_token === 'string' && fields.id_token !== ''
+        ? fields.id_token
+        : undefined;
+    return { accessToken: fields.access_token, idToken };
   }
 
   private reject(

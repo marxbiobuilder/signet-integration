@@ -30,6 +30,7 @@ import {
   FIXTURE_DEVELOPMENT_PROFILE,
   FIXTURE_OPTIONS,
 } from './testing/fixture';
+import { startTestIssuer } from './testing/signet-token';
 
 const PRODUCTION_PROFILE: DeploymentProfile = {
   canonicalResource: 'https://acme.example/mcp',
@@ -255,20 +256,32 @@ describe('SignetLoginFlow', () => {
   });
 
   describe('complete', () => {
-    it('exchanges the code with the PKCE verifier and returns the access token’s verified identity', async () => {
+    it('exchanges the code with the PKCE verifier and returns the access token’s verified identity and the ID token’s claims', async () => {
       const flow = build();
       const { cookie, url } = await begin(flow);
       const back = server.authorize(url, {
-        claims: { email: 'someone@example.com' },
+        claims: { erp: 'e-1' },
+        idTokenClaims: { email: 'someone@example.com', email_verified: true },
         subject: 'person-1',
       });
-      const identity = await flow.complete(callback(back, cookie).request);
+      const { identity, login } = await flow.complete(
+        callback(back, cookie).request,
+      );
       expect(identity).toMatchObject({
-        claims: { email: 'someone@example.com' },
+        claims: { erp: 'e-1' },
         clientId: CLIENT_ID,
         scopes: ['openid', 'acme:access'],
         subject: 'person-1',
       });
+      // The ID token's claims beside the identity, not mixed into it.
+      expect(login.idTokenClaims).toMatchObject({
+        aud: [CLIENT_ID],
+        email: 'someone@example.com',
+        email_verified: true,
+        sub: 'person-1',
+      });
+      expect(Object.isFrozen(login.idTokenClaims)).toBe(true);
+      expect(identity.claims).not.toHaveProperty('email');
       const [sent] = server.tokenRequests().slice(-1);
       expect(sent).toMatchObject({
         client_id: CLIENT_ID,
@@ -412,9 +425,11 @@ describe('SignetLoginFlow', () => {
       it('names a tampered cookie unopenable', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
+        // The second-to-last character, replaced by one it is not: the
+        // last carries padding bits a change might not touch.
         const flipped =
           cookie.slice(0, -2) +
-          (cookie.endsWith('A') ? 'B' : 'A') +
+          (cookie.at(-2) === 'A' ? 'B' : 'A') +
           cookie.slice(-1);
         expect(
           await rejection(
@@ -533,7 +548,7 @@ describe('SignetLoginFlow', () => {
           const flow = build();
           const stale = await begin(flow);
           const { cookie, url } = await begin(flow);
-          const identity = await flow.complete(
+          const { identity } = await flow.complete(
             callback(server.authorize(url), order(stale.cookie, cookie))
               .request,
           );
@@ -554,7 +569,7 @@ describe('SignetLoginFlow', () => {
           const bad = (await begin(leftover)).cookie;
           const flow = build();
           const { cookie, url } = await begin(flow);
-          const identity = await flow.complete(
+          const { identity } = await flow.complete(
             callback(server.authorize(url), order(bad, cookie)).request,
           );
           expect(identity.subject).toBe('test-user');
@@ -738,6 +753,13 @@ describe('SignetLoginFlow', () => {
         expect(loggedLines()).toContain('detail=client_id_mismatch');
       });
 
+      it('checks the access token before the ID token', async () => {
+        expect(await withToken('not-a-jwt')).toBe(
+          SignetLoginFailureEnum.TOKEN_REJECTED,
+        );
+        expect(loggedLines()).not.toContain('id_token');
+      });
+
       it('answers ADMISSION_SCOPE_NOT_GRANTED when the user did not grant the admission scope', async () => {
         const flow = build();
         const { cookie, url } = await begin(flow);
@@ -746,6 +768,147 @@ describe('SignetLoginFlow', () => {
           await rejection(flow.complete(callback(back, cookie).request)),
         ).toBe(SignetLoginFailureEnum.ADMISSION_SCOPE_NOT_GRANTED);
       });
+    });
+
+    describe('the ID token', () => {
+      const SUBJECT = 'person-1';
+      const accessToken = () =>
+        server.sign({
+          aud: [FIXTURE_DEVELOPMENT_PROFILE.canonicalResource],
+          client_id: CLIENT_ID,
+          iss: server.issuer,
+          scp: ['openid', 'acme:access'],
+          sub: SUBJECT,
+        });
+      const idTokenPayload = (overrides: Record<string, unknown> = {}) => ({
+        aud: CLIENT_ID,
+        iss: server.issuer,
+        sub: SUBJECT,
+        ...overrides,
+      });
+
+      // A real begin() and authorize(), then the token endpoint scripted to
+      // answer with these fields beside a valid access token.
+      const completeWith = async (fields: Record<string, unknown>) => {
+        const flow = build();
+        const { cookie, url } = await begin(flow);
+        const back = server.authorize(url);
+        server.scriptTokenEndpoint({
+          body: { access_token: await accessToken(), ...fields },
+        });
+        return flow.complete(callback(back, cookie).request);
+      };
+
+      const refused = async (fields: Record<string, unknown>) => {
+        expect(await rejection(completeWith(fields))).toBe(
+          SignetLoginFailureEnum.TOKEN_REJECTED,
+        );
+        return loggedLines();
+      };
+
+      it.each([
+        ['absent', {}],
+        ['empty', { id_token: '' }],
+        ['not a string', { id_token: 42 }],
+      ])(
+        'answers TOKEN_REJECTED when the ID token is %s: openid was asked for',
+        async (_, fields) => {
+          expect(await refused(fields)).toContain(
+            'reason=token_rejected detail=id_token_missing',
+          );
+        },
+      );
+
+      it('answers TOKEN_REJECTED for an ID token about someone else', async () => {
+        const idToken = await server.sign(
+          idTokenPayload({ sub: 'someone-else' }),
+        );
+        expect(await refused({ id_token: idToken })).toContain(
+          'detail=id_token_subject_mismatch',
+        );
+      });
+
+      it.each([
+        ['issued to another client', { aud: 'someone-else' }],
+        ['issued to no client', { aud: undefined }],
+        [
+          'that is really an access token',
+          { aud: [FIXTURE_DEVELOPMENT_PROFILE.canonicalResource] },
+        ],
+        ['from another issuer', { iss: 'https://someone-else.example' }],
+      ])('answers TOKEN_REJECTED for an ID token %s', async (_, overrides) => {
+        const idToken = await server.sign(idTokenPayload(overrides));
+        expect(await refused({ id_token: idToken })).toContain(
+          'detail=id_token:ERR_JWT_CLAIM_VALIDATION_FAILED',
+        );
+      });
+
+      it('answers TOKEN_REJECTED for an expired ID token', async () => {
+        const idToken = await server.sign(
+          idTokenPayload({ exp: Math.floor(Date.now() / 1000) - 3_600 }),
+        );
+        expect(await refused({ id_token: idToken })).toContain(
+          'detail=id_token:ERR_JWT_EXPIRED',
+        );
+      });
+
+      it('answers TOKEN_REJECTED for an ID token signed by a key the issuer does not publish', async () => {
+        const stranger = await startTestIssuer();
+        try {
+          const idToken = await stranger.sign(idTokenPayload());
+          expect(await refused({ id_token: idToken })).toContain(
+            'detail=id_token:ERR_JWS_SIGNATURE_VERIFICATION_FAILED',
+          );
+        } finally {
+          await stranger.close();
+        }
+      });
+
+      it.each([
+        ['the client as a string', CLIENT_ID],
+        ['the client alone in an array', [CLIENT_ID]],
+      ])('accepts an ID token whose aud is %s', async (_, aud) => {
+        const idToken = await server.sign(idTokenPayload({ aud }));
+        const { login } = await completeWith({ id_token: idToken });
+        expect(login.idTokenClaims.aud).toEqual(aud);
+      });
+
+      it.each([
+        ['without azp', {}],
+        ['even with azp naming this client', { azp: CLIENT_ID }],
+      ])(
+        'answers TOKEN_REJECTED for an ID token for this client and another, %s',
+        async (_, overrides) => {
+          const idToken = await server.sign(
+            idTokenPayload({ aud: [CLIENT_ID, 'someone-else'], ...overrides }),
+          );
+          expect(await refused({ id_token: idToken })).toContain(
+            'detail=id_token:ERR_JWT_EXTRA_AUDIENCE',
+          );
+        },
+      );
+
+      it('answers TOKEN_REJECTED for an ID token whose azp names another client', async () => {
+        const idToken = await server.sign(
+          idTokenPayload({ azp: 'someone-else' }),
+        );
+        expect(await refused({ id_token: idToken })).toContain(
+          'detail=id_token:ERR_JWT_AZP_MISMATCH',
+        );
+      });
+
+      it.each([
+        ['an empty sub', { sub: '' }, 'ERR_JWT_NO_SUB'],
+        ['no exp', { exp: undefined }, 'ERR_JWT_NO_EXP'],
+      ])(
+        'answers TOKEN_REJECTED for an ID token with %s',
+        async (_, overrides, reason) => {
+          const idToken = await server.sign(idTokenPayload(overrides));
+          expect(await refused({ id_token: idToken })).toContain(
+            `detail=id_token:${reason}`,
+          );
+        },
+      );
     });
 
     it('logs no code, no state and no query string', async () => {

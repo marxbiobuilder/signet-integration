@@ -30,6 +30,15 @@ describe('validateLoginEntry', () => {
     },
   );
 
+  it.each([[['email']], [[]]])(
+    'refuses scopes without openid (%j): there would be no ID token',
+    (scopes) => {
+      expect(() => validateLoginEntry({ ...LOGIN_ENTRY, scopes })).toThrow(
+        'scopes must include openid',
+      );
+    },
+  );
+
   it('accepts scope tokens with the RFC’s punctuation', () => {
     expect(() =>
       validateLoginEntry({

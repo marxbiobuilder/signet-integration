@@ -33,6 +33,7 @@ export {
 } from '../deployment-profile';
 export { SignetBearerGuard } from '../guard';
 export {
+  type IdTokenVerifyResult,
   type JwtRejection,
   JwtRejectionEnum,
   JwtVerifier,
@@ -46,6 +47,7 @@ export {
   type SignetLoginFailure,
   SignetLoginFailureEnum,
 } from '../login-error';
+export { type SignetLoginContext } from '../login-flow';
 export {
   SignetLoginStrategy,
   type SignetLoginStrategyBase,

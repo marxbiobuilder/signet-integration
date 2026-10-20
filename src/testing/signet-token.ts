@@ -37,11 +37,19 @@ export async function startTestIssuer(): Promise<TestIssuer> {
     keys: [{ ...(await exportJWK(pair.publicKey)), alg: 'ES256', kid: 'k1' }],
   };
   const keys = await startJwksServer(jwks);
-  const sign = (payload: JWTPayload, header: { typ?: string } = {}) =>
-    new SignJWT(payload)
-      .setProtectedHeader({ alg: 'ES256', kid: 'k1', ...header })
-      .setExpirationTime('5m')
-      .sign(signingKey);
+  // Five minutes unless the payload names its own `exp`: a number is kept
+  // (an expired token), and the key spelled out as `undefined` leaves the
+  // token without one, which no real issuer should mint.
+  const sign = (payload: JWTPayload, header: { typ?: string } = {}) => {
+    const jwt = new SignJWT(payload).setProtectedHeader({
+      alg: 'ES256',
+      kid: 'k1',
+      ...header,
+    });
+    return ('exp' in payload ? jwt : jwt.setExpirationTime('5m')).sign(
+      signingKey,
+    );
+  };
   return {
     close: () => keys.close(),
     jwks,
