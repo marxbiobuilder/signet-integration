@@ -1,0 +1,40 @@
+{
+  "name": "@marxbiotech/mcp-device-adapter",
+  "version": "0.1.0",
+  "description": "Device authorization and stdio MCP bridge for Signet-protected Rover and Lander services",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marxbiobuilder/signet-integration.git",
+    "directory": "packages/mcp-device-adapter"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "mcp-device-adapter": "dist/main.cjs"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run build",
+    "lint": "eslint \"src/**/*.ts\" --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "TZ=UTC jest --runInBand"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "jose": "5.10.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

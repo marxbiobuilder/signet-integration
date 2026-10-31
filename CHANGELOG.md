@@ -7,6 +7,10 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Share JWT verification, discovery and HTTP primitives with a standalone MCP device adapter while preserving existing entry points.
+- Add a framework-independent `/client` entry for device authorization and token validation.
+- Add independent adapter packaging and release workflow; existing server-package tags remain unchanged.
+
 ## [0.3.0] - 2026-10-20
 
 網頁登入：`SignetLoginStrategy` 以 authorization code + PKCE（public client）

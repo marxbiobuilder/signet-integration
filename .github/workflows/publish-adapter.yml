@@ -1,0 +1,53 @@
+name: Publish MCP adapter
+
+on:
+  push:
+    tags:
+      - 'adapter-v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Validate tag and select dist-tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('packages/mcp-device-adapter/package.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `adapter-v${version}`) throw new Error('Tag/version mismatch');
+          const pre = version.split('-')[1]?.split('.')[0];
+          if (pre && (!/^[A-Za-z][A-Za-z0-9-]*$/.test(pre) || pre === 'latest')) throw new Error('Invalid prerelease dist-tag');
+          appendFileSync(process.env.GITHUB_OUTPUT, `dist-tag=${pre ?? ''}\n`);
+          NODE
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm test:package
+      - name: Publish adapter with its configured npm trusted publisher
+        working-directory: packages/mcp-device-adapter
+        env:
+          DIST_TAG: ${{ steps.version.outputs.dist-tag }}
+        run: |
+          if [ -n "$DIST_TAG" ]; then
+            npm publish --provenance --tag "$DIST_TAG"
+          else
+            npm publish --provenance
+          fi
