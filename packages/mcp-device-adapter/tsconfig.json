@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "./dist",
+    "moduleResolution": "node16",
+    "module": "Node16",
+    "emitDecoratorMetadata": false,
+    "skipLibCheck": true,
+    "isolatedModules": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../src/core/**/*.ts"
+  ]
+}

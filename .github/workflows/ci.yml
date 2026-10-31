@@ -43,3 +43,6 @@ jobs:
 
       - name: Show what a publish would ship
         run: npm pack --dry-run
+
+      - name: Verify adapter package in a clean installation
+        run: pnpm test:package

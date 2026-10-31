@@ -1,20 +1,13 @@
 import { type ConfigService } from '@nestjs/config';
 
+import { type JwtSettings } from './core/jwt-settings';
 import { type DeploymentProfile } from './deployment-profile';
 import { type SignetIntegrationOptions } from './options';
 
 // The variable NAMES come from the options, never from this file.
 export type SignetEnvOptions = Pick<SignetIntegrationOptions, 'env'>;
 
-export interface JwtSettings {
-  // The expected `aud`: the deployment profile's canonical resource. The
-  // audience variable is only cross-checked against the namespace at boot
-  // and is never read here.
-  readonly audience: string;
-  readonly clockToleranceS: number;
-  readonly issuer: string;
-  readonly jwksUri: string;
-}
+export { type JwtSettings } from './core/jwt-settings';
 
 export interface ChannelFlags {
   readonly legacyApiKeyEnabled: boolean;

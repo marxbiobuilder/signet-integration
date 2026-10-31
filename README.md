@@ -1,5 +1,11 @@
 # @marxbiotech/signet-integration
 
+For agent-host device authorization and command/stdio MCP access to Rover or
+Lander, see the separate [MCP device adapter](packages/mcp-device-adapter/README.md).
+The framework-independent device-flow and JWT APIs are also available from
+`@marxbiotech/signet-integration/client`; this subpath has no NestJS runtime
+imports, while the package itself retains its existing NestJS peer requirements.
+
 Signet (OAuth 2.1 / OIDC, Ory Hydra) **resource-server** integration for
 NestJS: Bearer access-token verification against the issuer's JWKS, RFC 6750
 `WWW-Authenticate` challenges, RFC 9728 protected-resource metadata, the
