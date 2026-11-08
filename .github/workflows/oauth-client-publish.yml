@@ -1,0 +1,58 @@
+name: Publish OAuth client
+
+on:
+  push:
+    tags:
+      - 'oauth-client-v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Validate package name, version and dist-tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const pkg = JSON.parse(fs.readFileSync('packages/oauth-client/package.json', 'utf8'));
+          if (pkg.name !== '@xignet/oauth-client' || process.env.RELEASE_TAG !== `oauth-client-v${pkg.version}`) {
+            throw new Error('Release tag or package scope does not match the OAuth client package');
+          }
+          const tag = pkg.version.includes('-') ? pkg.version.split('-')[1].split('.')[0] : '';
+          if (tag && (!/^[A-Za-z][A-Za-z0-9-]*$/.test(tag) || /^(latest|x|v\d.*)$/i.test(tag))) {
+            throw new Error('Invalid prerelease npm dist-tag');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+          NODE
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prettier --check 'packages/oauth-client/**/*.{cts,json,mjs}'
+      - run: pnpm --filter @xignet/oauth-client typecheck
+      - run: pnpm --filter @xignet/oauth-client test
+      - name: Check packed artifact
+        working-directory: packages/oauth-client
+        run: npm pack --dry-run
+      - name: Publish to the xignet npm organization
+        working-directory: packages/oauth-client
+        env:
+          DIST_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if [ -n "$DIST_TAG" ]; then
+            npm publish --access public --tag "$DIST_TAG"
+          else
+            npm publish --access public
+          fi

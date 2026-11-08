@@ -1,5 +1,11 @@
 # @marxbiotech/signet-integration
 
+For outbound machine-to-machine OAuth, use the independent
+[`@xignet/oauth-client`](packages/oauth-client/README.md) package in this
+repository. It manages client credentials, token caching and safe invalidation
+without any NestJS/Passport dependencies. The root package below continues to
+provide resource-server and interactive login integration.
+
 Signet (OAuth 2.1 / OIDC, Ory Hydra) **resource-server** integration for
 NestJS: Bearer access-token verification against the issuer's JWKS, RFC 6750
 `WWW-Authenticate` challenges, RFC 9728 protected-resource metadata, the
