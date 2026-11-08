@@ -64,8 +64,10 @@ trusted code, preserve abort handling and do not log request headers or bodies.
 It adds no cache or refresh lock. The operation receives `{ token, attempt }`
 and returns `{ status, value, dispose? }`. Return non-2xx HTTP responses too;
 thrown errors mean request/transport failures, not an HTTP-401 response.
-Only 2xx returns `value` to the caller. Successful response parsing and schema
-validation remain consumer responsibilities.
+Only 2xx returns `value` to the caller. Promise-valued results are awaited inside
+the safety boundary; rejected values are disposed and classified as
+`INVALID_RESOURCE_RESPONSE`. Parsing/schema validation performed by the consumer
+after this call remains the consumer's responsibility.
 
 ```ts
 import { executeWithBearer, createFetchOperation } from '@xignet/client';

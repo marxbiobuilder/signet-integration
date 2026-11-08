@@ -466,6 +466,23 @@ test('malformed response getters cannot leak errors and unused responses are dis
   assert.equal(disposed, true);
 });
 
+test('asynchronous response-value rejection is sanitized and disposed', async () => {
+  const p = provider();
+  let disposed = false;
+  const error = await executeWithBearer(p.client, async () => ({
+    status: 200,
+    value: Promise.reject(sensitiveError()),
+    dispose: () => {
+      disposed = true;
+    },
+  })).catch((e) => e);
+  assertSafe(error);
+  assert.equal(error.code, 'INVALID_RESOURCE_RESPONSE');
+  assert.equal(error.status, 200);
+  assert.equal(disposed, true);
+  assert.equal(p.calls(), 1);
+});
+
 test('public safe error constructor never interpolates untrusted runtime values', () => {
   const error = new SignetRequestError(
     secret,
