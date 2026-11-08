@@ -247,7 +247,7 @@ export async function executeWithBearer<T>(
     }
     if (status >= 200 && status < 300) {
       try {
-        return response.value;
+        return await response.value;
       } catch {
         await release();
         throw new SignetRequestError(

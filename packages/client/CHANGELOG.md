@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Sanitize asynchronous response-value rejections and dispose the unused
+  response, matching synchronous value/getter failures.
+
 ## 0.2.0
 
 - Add optional `executeWithBearer` and `createFetchOperation` APIs for shared
