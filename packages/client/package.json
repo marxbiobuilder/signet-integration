@@ -1,12 +1,12 @@
 {
-  "name": "@xignet/oauth-client",
+  "name": "@xignet/client",
   "version": "0.1.0",
   "description": "Signet machine-to-machine OAuth client with safe errors, token caching and client_secret_basic authentication.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/marxbiobuilder/signet-integration.git",
-    "directory": "packages/oauth-client"
+    "directory": "packages/client"
   },
   "type": "commonjs",
   "main": "./dist/index.cjs",
