@@ -1,6 +1,6 @@
 export interface SignetClientOptions {
-  /** Explicit token_endpoint from the issuer's discovery document. HTTPS only. */
-  tokenUrl: string;
+  /** Defaults to Xignet production. Override for other deployments; HTTPS only. */
+  tokenUrl?: string;
   clientId: string;
   clientSecret: string;
   /** Signet/Hydra expects audience in the form body, not resource or query. */
@@ -34,14 +34,18 @@ export class SignetOAuthError extends Error {
  * process memory. No timers, persistent storage, logging or API retries.
  */
 export class SignetClient {
-  readonly #options: Readonly<SignetClientOptions>;
+  readonly #options: Readonly<SignetClientOptions & { tokenUrl: string }>;
   #cached?: { value: string; expiresAt: number };
   #inFlight?: Promise<string>;
 
   constructor(options: SignetClientOptions) {
     const invalid = () => new SignetOAuthError('INVALID_CONFIGURATION');
+    const tokenUrl =
+      options.tokenUrl === undefined
+        ? 'https://xignet.marxbio.tech/oauth2/token'
+        : options.tokenUrl;
     for (const value of [
-      options.tokenUrl,
+      tokenUrl,
       options.clientId,
       options.clientSecret,
       options.audience,
@@ -51,7 +55,7 @@ export class SignetClient {
     }
     let url: URL;
     try {
-      url = new URL(options.tokenUrl);
+      url = new URL(tokenUrl);
     } catch {
       throw invalid();
     }
@@ -76,6 +80,7 @@ export class SignetClient {
       throw invalid();
     this.#options = Object.freeze({
       ...options,
+      tokenUrl,
       timeoutMs: timeout,
       refreshMarginSeconds: margin,
     });

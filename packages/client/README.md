@@ -17,7 +17,6 @@ npm install @xignet/client
 import { SignetClient, SignetOAuthError } from '@xignet/client';
 
 const auth = new SignetClient({
-  tokenUrl: process.env.SIGNET_TOKEN_URL!, // token_endpoint from discovery
   clientId: process.env.SIGNET_CLIENT_ID!, // original ID, NOT pre-encoded
   clientSecret: process.env.SIGNET_CLIENT_SECRET!,
   audience: 'https://stocksync.marxbiotech.com/api/mcp',
@@ -41,9 +40,12 @@ single promise. Failures clear that promise so a later call can recover.
 
 `audience` and `scope` are sent in the form body. Credentials use Basic auth;
 the caller must pass their original values without pre-encoding them. The token
-URL must use HTTPS and contain no credentials, query or fragment. Redirects
-are rejected. This package uses the explicitly configured token endpoint; it
-does not perform discovery, decode the access token or manage user sessions.
+endpoint defaults to `https://xignet.marxbio.tech/oauth2/token`, as advertised by
+Xignet's discovery document. No token URL environment variable is needed.
+For another deployment, pass the optional `tokenUrl` from its discovery document;
+it must use HTTPS and contain no credentials, query or fragment. Redirects are
+rejected. This package does not perform runtime discovery, decode the access
+token or manage user sessions. `audience` and `scope` remain required.
 
 The SDK does **not** retry token failures or make business API requests. API
 401/403 handling belongs to the consumer: invalidate and retry once for 401;

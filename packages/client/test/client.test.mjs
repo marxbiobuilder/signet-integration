@@ -44,6 +44,20 @@ test('supports CommonJS require and ESM named imports', () => {
   assert.equal(require('../dist/index.cjs').SignetClient, SignetClient);
 });
 
+test('defaults to Xignet production when tokenUrl is omitted', async () => {
+  const requests = [];
+  const { tokenUrl: _tokenUrl, ...credentials } = settings;
+  const client = new SignetClient({
+    ...credentials,
+    fetch: async (url) => {
+      requests.push(String(url));
+      return response();
+    },
+  });
+  assert.equal(await client.getAccessToken(), 'sensitive-token');
+  assert.deepEqual(requests, ['https://xignet.marxbio.tech/oauth2/token']);
+});
+
 test('uses the real OAuth library with encoded Basic credentials and body audience/scope', async () => {
   const { client, requests } = harness();
   assert.equal(await client.getAccessToken(), 'sensitive-token');
@@ -296,6 +310,8 @@ test('aborts the token transport at the configured deadline and returns a safe e
 });
 
 for (const overrides of [
+  { tokenUrl: '' },
+  { tokenUrl: null },
   { tokenUrl: 'http://issuer.example/token' },
   { tokenUrl: 'not a URL' },
   { tokenUrl: 'https://user:password@issuer.example/token' },

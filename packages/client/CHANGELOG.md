@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Default the token endpoint to `https://xignet.marxbio.tech/oauth2/token`.
+  `tokenUrl` is now optional; explicit HTTPS overrides remain supported.
+  Audience and scope are still required.
+
 ## 0.1.0
 
 - Publish under the concise `@xignet/client` name. This replaces
