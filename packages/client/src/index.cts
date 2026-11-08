@@ -1,3 +1,17 @@
+export {
+  executeWithBearer,
+  createFetchOperation,
+  SignetRequestError,
+  type BearerTokenProvider,
+  type BearerAttempt,
+  type BearerResponse,
+  type BearerOperation,
+  type BearerRequestOptions,
+  type BearerTransportCode,
+  type SignetRequestErrorCode,
+  type SignetRequestPhase,
+} from './bearer.cjs';
+
 export interface SignetClientOptions {
   /** Defaults to Xignet production. Override for other deployments; HTTPS only. */
   tokenUrl?: string;

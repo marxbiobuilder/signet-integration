@@ -47,10 +47,9 @@ it must use HTTPS and contain no credentials, query or fragment. Redirects are
 rejected. This package does not perform runtime discovery, decode the access
 token or manage user sessions. `audience` and `scope` remain required.
 
-The SDK does **not** retry token failures or make business API requests. API
-401/403 handling belongs to the consumer: invalidate and retry once for 401;
-fail immediately for 403. `invalidateToken(rejectedToken)` cannot evict a newer
-token obtained for another request. There is no refresh token in this flow.
+The low-level token API makes no resource requests. The optional executor below
+can manage the resource-401 flow. `invalidateToken(rejectedToken)` cannot evict
+a newer token obtained for another request. There is no refresh token in this flow.
 
 `SignetOAuthError` exposes only `code` and optional HTTP `status`. Codes are
 `INVALID_CONFIGURATION`, `TOKEN_REQUEST_FAILED` and `INVALID_TOKEN_RESPONSE`.
@@ -58,6 +57,129 @@ Raw upstream errors, response bodies and causes are discarded so they cannot
 leak credentials or tokens through application logging. The SDK itself emits no
 logs. The optional `fetch` transport override receives credentials; treat it as
 trusted code, preserve abort handling and do not log request headers or bodies.
+
+## Optional Bearer request executor
+
+`executeWithBearer(auth, operation, options)` reuses the same `SignetClient`.
+It adds no cache or refresh lock. The operation receives `{ token, attempt }`
+and returns `{ status, value, dispose? }`. Return non-2xx HTTP responses too;
+thrown errors mean request/transport failures, not an HTTP-401 response.
+Only 2xx returns `value` to the caller. Successful response parsing and schema
+validation remain consumer responsibilities.
+
+```ts
+import { executeWithBearer, createFetchOperation } from '@xignet/client';
+
+const response = await executeWithBearer(auth, createFetchOperation(() =>
+  new Request('https://resource.example/products?limit=50', {
+    method: 'GET', headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(10_000),
+  }),
+), {
+  retryOnUnauthorized: true, // explicit assertion: this operation is safe to replay
+  onRetry: () => logger.warn('Resource rejected token; refreshing and retrying'),
+});
+const data: unknown = await response.json(); // validate against your schema
+```
+
+### Replay and cleanup contract
+
+- **Default: no replay**, regardless of HTTP method. Every resource 401 still
+  invalidates its rejected token and disposes the unused response.
+- `retryOnUnauthorized: true` permits **at most two resource sends**: the initial
+  attempt and one authentication replay. A second 401 invalidates that token and
+  fails; it never acquires a third token. Token acquisition failures, 403, 429,
+  5xx and network errors do not trigger automatic replay or API key fallback.
+- Each operation invocation must preserve method, URL/query, necessary headers
+  and payload semantics, replacing only Bearer authorization. Rebuild one-shot
+  bodies in the factory; do not close over an already consumed stream/Request.
+  The fetch adapter rejects used, locked or reused bodies before sending them.
+- The fetch adapter permits HTTPS only and forces `redirect: 'error'`. It
+  overwrites Authorization through `Headers`, preserving other request settings.
+  Non-2xx response bodies are canceled before replay or failure. For other
+  transports, supply `dispose` when responses own unused resources; buffered
+  Axios responses normally need no disposal. Disposal failure stops the flow
+  with a safe error and cannot expand the replay budget.
+- `onRetry` runs after cleanup, before acquiring the replacement token. It sees
+  no credentials. A thrown/rejected notification fails safely without replay.
+  SDK code itself never logs. Consumer logging, deadlines/cancellation, endpoint
+  selection, domain diagnostics and external HTTP/Nest/MCP mappings stay local.
+- **At most one replay is not exactly-once delivery.** This executor provides
+  no business idempotency. A POST such as OrderSync's read-only batch-eligibility
+  check may be replayable by its business contract; that does not make arbitrary
+  POST requests replayable. Omit the replay option when safe replay is unknown.
+
+For a replayable read-only POST, recreate its body each time:
+
+```ts
+const operation = createFetchOperation(() => new Request(
+  'https://resource.example/batch-eligibility', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ids: selectedIds }), // rebuild on every invocation
+  },
+));
+const response = await executeWithBearer(auth, operation, { retryOnUnauthorized: true });
+```
+
+### Axios adapter example (consumer dependency only)
+
+The core package does not depend on Axios. Normalize its HTTP rejections into
+responses; let network/unknown failures throw to the executor. Keep domain code
+interpretation in this trusted adapter, accepting only explicit known values.
+Do not attach the raw response or upstream diagnostic text to a thrown error.
+
+```ts
+import axios, { type AxiosResponse } from 'axios';
+import { executeWithBearer } from '@xignet/client';
+
+const response = await executeWithBearer<AxiosResponse<unknown>>(auth, async ({ token }) => {
+  try {
+    const value = await axios.get('https://resource.example/products', {
+      params: { limit: 50 }, maxRedirects: 0,
+      headers: { accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+    return { status: value.status, value };
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response) {
+      // Optional: interpret a resource-specific code using a literal allow-list here.
+      return { status: error.response.status, value: error.response };
+    }
+    throw error; // executor discards the raw error, config, body and cause
+  }
+}, { retryOnUnauthorized: true });
+// Validate response.data; translate errors to your application's public contract.
+```
+
+Operations, request factories, `fetch` overrides and notification callbacks are
+**trusted consumer code**. They receive or use Bearer credentials and must not
+log, persist or forward them. The executor bounds its own invocations; it cannot
+prevent a callback from sending extra requests or changing business semantics.
+
+### Safe request errors
+
+`SignetRequestError` carries only:
+
+| Field | Meaning |
+|---|---|
+| `phase` | `configuration`, `token`, or `resource` |
+| `code` | Fixed SDK classification; never arbitrary upstream code/message |
+| `status` | HTTP status when known (integer 100–599) |
+| `attempt` | 1 or 2; token and resource failures identify their attempt |
+| `afterUnauthorized` | True for the attempt following a resource 401 |
+| `retryExhausted` | True only when the replayed resource request also returned 401 |
+| `transportCode` | Optional literal allow-listed transport diagnostic |
+
+Codes: `INVALID_CONFIGURATION`, `TOKEN_REQUEST_FAILED`, `INVALID_TOKEN_RESPONSE`,
+`RESOURCE_HTTP_ERROR`, `RESOURCE_NETWORK_ERROR`, `RESOURCE_REQUEST_FAILED`,
+`INVALID_RESOURCE_RESPONSE`, `RESOURCE_DISPOSAL_FAILED`,
+`RESOURCE_BODY_UNAVAILABLE`, `RETRY_CALLBACK_FAILED`.
+Token status 401 remains `phase: 'token'`; it is never mistaken for resource 401.
+Unknown resource exceptions use `RESOURCE_REQUEST_FAILED`. The fetch adapter
+classifies fetch rejection as a network failure; known transport codes (such as
+`ETIMEDOUT`/`ENOTFOUND`) are allow-listed, not trusted via a string regex.
+Raw URLs, tokens, headers, Axios configs, response bodies, causes and upstream
+`error_description` are excluded from the message, properties and stack. Domain
+codes such as StockSync's `SERVICE_ACCOUNT_DISABLED` are not SDK classifications.
 
 ## Migrating from @xignet/oauth-client
 
