@@ -43,3 +43,25 @@ jobs:
 
       - name: Show what a publish would ship
         run: npm pack --dry-run
+
+  oauth-client:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22.22.0', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prettier --check 'packages/oauth-client/**/*.{cts,json,mjs}'
+      - run: pnpm --filter @xignet/oauth-client typecheck
+      - run: pnpm --filter @xignet/oauth-client test
+      - name: Check OAuth client package contents
+        working-directory: packages/oauth-client
+        run: npm pack --dry-run
