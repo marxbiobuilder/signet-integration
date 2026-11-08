@@ -1,7 +1,7 @@
 # @marxbiotech/signet-integration
 
 For outbound machine-to-machine OAuth, use the independent
-[`@xignet/oauth-client`](packages/oauth-client/README.md) package in this
+[`@xignet/client`](packages/client/README.md) package in this
 repository. It manages client credentials, token caching and safe invalidation
 without any NestJS/Passport dependencies. The root package below continues to
 provide resource-server and interactive login integration.

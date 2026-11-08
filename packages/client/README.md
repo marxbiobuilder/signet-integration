@@ -1,4 +1,4 @@
-# @xignet/oauth-client
+# @xignet/client
 
 Signet OAuth **machine client** for Node.js. Uses `openid-client` for the
 `client_credentials` protocol and RFC 6749 `client_secret_basic` encoding,
@@ -10,11 +10,11 @@ named imports. The CommonJS entry loads the ESM protocol library with native
 dynamic `import()`.
 
 ```sh
-npm install @xignet/oauth-client
+npm install @xignet/client
 ```
 
 ```ts
-import { SignetClient, SignetOAuthError } from '@xignet/oauth-client';
+import { SignetClient, SignetOAuthError } from '@xignet/client';
 
 const auth = new SignetClient({
   tokenUrl: process.env.SIGNET_TOKEN_URL!, // token_endpoint from discovery
@@ -57,22 +57,28 @@ leak credentials or tokens through application logging. The SDK itself emits no
 logs. The optional `fetch` transport override receives credentials; treat it as
 trusted code, preserve abort handling and do not log request headers or bodies.
 
+## Migrating from @xignet/oauth-client
+
+Replace the package dependency and import source with `@xignet/client`.
+`SignetClient`, `SignetOAuthError`, configuration and runtime behavior are
+unchanged. The previous package remains installable with a deprecation notice.
+
 ## Development and release
 
 From the repository root:
 
 ```sh
 pnpm install
-pnpm --filter @xignet/oauth-client test
-pnpm --filter @xignet/oauth-client typecheck
-pnpm --filter @xignet/oauth-client build
+pnpm --filter @xignet/client test
+pnpm --filter @xignet/client typecheck
+pnpm --filter @xignet/client build
 ```
 
 Releases are independent of the existing root package. Bump this package's
-version and changelog, then push a matching `oauth-client-vX.Y.Z` tag. The
-`oauth-client-publish.yml` GitHub Actions workflow validates, builds, checks the
+version and changelog, then push a matching `client-vX.Y.Z` tag. The
+`client-publish.yml` GitHub Actions workflow validates, builds, checks the
 packed artifact and publishes to npm with OIDC. Configure its npm Trusted
 Publisher as GitHub owner `marxbiobuilder`, repository `signet-integration`,
-workflow `oauth-client-publish.yml`. A first package publication/registration
+workflow `client-publish.yml`. A first package publication/registration
 and npm organization permissions must be established before relying on OIDC.
 Prereleases are published under their first prerelease identifier, not `latest`.

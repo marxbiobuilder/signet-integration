@@ -3,7 +3,7 @@ name: Publish OAuth client
 on:
   push:
     tags:
-      - 'oauth-client-v*.*.*'
+      - 'client-v*.*.*'
 
 permissions:
   contents: read
@@ -29,8 +29,8 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const pkg = JSON.parse(fs.readFileSync('packages/oauth-client/package.json', 'utf8'));
-          if (pkg.name !== '@xignet/oauth-client' || process.env.RELEASE_TAG !== `oauth-client-v${pkg.version}`) {
+          const pkg = JSON.parse(fs.readFileSync('packages/client/package.json', 'utf8'));
+          if (pkg.name !== '@xignet/client' || process.env.RELEASE_TAG !== `client-v${pkg.version}`) {
             throw new Error('Release tag or package scope does not match the OAuth client package');
           }
           const tag = pkg.version.includes('-') ? pkg.version.split('-')[1].split('.')[0] : '';
@@ -40,14 +40,14 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
           NODE
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec prettier --check 'packages/oauth-client/**/*.{cts,json,mjs}'
-      - run: pnpm --filter @xignet/oauth-client typecheck
-      - run: pnpm --filter @xignet/oauth-client test
+      - run: pnpm exec prettier --check 'packages/client/**/*.{cts,json,mjs}'
+      - run: pnpm --filter @xignet/client typecheck
+      - run: pnpm --filter @xignet/client test
       - name: Check packed artifact
-        working-directory: packages/oauth-client
+        working-directory: packages/client
         run: npm pack --dry-run
       - name: Publish to the xignet npm organization
-        working-directory: packages/oauth-client
+        working-directory: packages/client
         env:
           DIST_TAG: ${{ steps.release.outputs.tag }}
         run: |
