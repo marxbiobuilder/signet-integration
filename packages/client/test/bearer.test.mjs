@@ -478,6 +478,7 @@ test('asynchronous response-value rejection is sanitized and disposed', async ()
   })).catch((e) => e);
   assertSafe(error);
   assert.equal(error.code, 'INVALID_RESOURCE_RESPONSE');
+  assert.equal(error.status, 200);
   assert.equal(disposed, true);
   assert.equal(p.calls(), 1);
 });
