@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Add optional `executeWithBearer` and `createFetchOperation` APIs for shared
+  resource-401 handling, explicit replay policy and unused-response disposal.
+- Add safe `SignetRequestError` classifications for configuration, token and
+  resource failures. No Axios/framework dependency or application logging.
+- Preserve the existing token acquisition/cache/invalidation API unchanged.
+
 ## 0.1.1
 
 - Default the token endpoint to `https://xignet.marxbio.tech/oauth2/token`.
