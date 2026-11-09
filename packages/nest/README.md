@@ -378,18 +378,9 @@ git tag nest-v0.4.0 && git push origin nest-v0.4.0
 `.github/workflows/nest-publish.yml` refuses a tag that does not equal
 `nest-v<package.json version>` or a package not named `@xignet/nest`, runs
 lint, tests and build, and publishes with npm trusted publishing (OIDC).
-Releases are never published from a developer machine; the one exception is the
-placeholder below that creates the package. The npm Trusted Publisher for
+Nothing is published from a developer machine. The npm Trusted Publisher for
 `@xignet/nest` names GitHub owner `marxbiobuilder`, repository
 `signet-integration`, workflow `nest-publish.yml`.
-
-npm only accepts a Trusted Publisher on a package that already exists, so the
-name is created once by hand, as `@xignet/client` was: an `@xignet` org owner
-publishes a `0.0.0-stage` placeholder under the `stage` dist-tag (never
-`latest`, and never a version a tag will later publish, since npm refuses to
-publish a version twice, so not this repository's `0.4.0` manifest either),
-then configures the Trusted Publisher, and the first real release is the
-`nest-v0.4.0` tag.
 
 A prerelease goes out the same way, from a release branch named after the
 full version (`release/nest-0.5.0-beta.0`) that is tagged but not merged. Its
