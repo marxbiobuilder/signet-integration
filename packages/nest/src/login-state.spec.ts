@@ -42,6 +42,14 @@ describe('loginStateKey', () => {
       'MY_SECRET: the login state secret must be at least 32 bytes',
     );
   });
+
+  it("derives the same key as 0.3.0, so replicas on either version open each other's states", () => {
+    expect(
+      Buffer.from(
+        loginStateKey('a-login-state-secret-of-32-bytes!', 'spec'),
+      ).toString('hex'),
+    ).toBe('ab69972f55afda2b89633174ba4509caabfc747abe48993afa199d5cbce3df44');
+  });
 });
 
 describe('openLoginState', () => {

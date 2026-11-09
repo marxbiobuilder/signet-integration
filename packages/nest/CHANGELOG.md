@@ -9,10 +9,11 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2026-11-09
 
-改名為 `@xignet/nest`，原 `@marxbiotech/signet-integration` 不再發新版。API、行為與發佈內容不變：
+改名為 `@xignet/nest`，原 `@marxbiotech/signet-integration` 不再發新版。API 與行為不變：
 把依賴換成 `@xignet/nest`，import 路徑 `@marxbiotech/signet-integration[/passport|/testing]` 改成
 `@xignet/nest[/passport|/testing]` 即可。登入 state 的金鑰推導不變，新舊名稱的 replica 可以互開
-對方封的 state，rolling deploy 不需要同時升級。
+對方封的 state，rolling deploy 不需要同時升級。發佈的檔案集合與 0.3.0 相同，內容只差在
+`package.json`（套件身分）、`README.md`，以及 `dist/login-state.js` 多一段註解與它的 source map。
 
 ### Changed
 
