@@ -7,6 +7,20 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+改名為 `@xignet/nest`，原 `@marxbiotech/signet-integration` 不再發新版。API、行為與發佈內容不變：
+把依賴換成 `@xignet/nest`，import 路徑 `@marxbiotech/signet-integration[/passport|/testing]` 改成
+`@xignet/nest[/passport|/testing]` 即可。登入 state 的金鑰推導不變，新舊名稱的 replica 可以互開
+對方封的 state，rolling deploy 不需要同時升級。
+
+### Changed
+
+- 套件名 `@marxbiotech/signet-integration` → `@xignet/nest`；原始碼搬到 repository 的
+  `packages/nest`，與 `@xignet/client` 並列。
+- 發版 tag 改為 `nest-vX.Y.Z`，由 `.github/workflows/nest-publish.yml` 發佈；`vX.Y.Z` tag
+  不再觸發發佈。
+
 ## [0.3.0] - 2026-10-20
 
 網頁登入：`SignetLoginStrategy` 以 authorization code + PKCE（public client）

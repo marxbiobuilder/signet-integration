@@ -1,7 +1,7 @@
-# Publishes to npm when a `vX.Y.Z` or `vX.Y.Z-<pre>` tag is pushed.
-# Authenticates with npm trusted publishing (OIDC): no token, no OTP. The
-# trusted publisher on npmjs.com must name this repository and this file
-# (`publish.yml`).
+# Publishes @xignet/nest (packages/nest) to npm when a `nest-vX.Y.Z` or
+# `nest-vX.Y.Z-<pre>` tag is pushed. Authenticates with npm trusted publishing
+# (OIDC): no token, no OTP. The trusted publisher on npmjs.com must name this
+# repository and this file (`nest-publish.yml`).
 #
 # npm 11 refuses to publish a prerelease without `--tag`, so a prerelease
 # (`vX.Y.Z-beta.0`) gets `--tag` set to its first prerelease identifier
@@ -9,12 +9,12 @@
 # and keeps its check that refuses to move `latest` below a higher version
 # already published (a `0.2.1` backport after `0.3.0`). An explicit `--tag`
 # turns both of npm's checks off.
-name: Publish
+name: Publish @xignet/nest
 
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'nest-v*.*.*'
 
 permissions:
   contents: read
@@ -39,20 +39,25 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - name: Refuse a tag that does not match package.json
+      - name: Refuse a tag that does not match packages/nest/package.json
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          version="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "v$version" ]; then
-            echo "tag $TAG does not match package.json version $version" >&2
+          name="$(node -p "require('./packages/nest/package.json').name")"
+          version="$(node -p "require('./packages/nest/package.json').version")"
+          if [ "$name" != "@xignet/nest" ]; then
+            echo "packages/nest/package.json is $name, not @xignet/nest" >&2
+            exit 1
+          fi
+          if [ "$TAG" != "nest-v$version" ]; then
+            echo "tag $TAG does not match packages/nest/package.json version $version" >&2
             exit 1
           fi
 
       - name: Pick the npm dist-tag
         id: dist-tag
         run: |
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./packages/nest/package.json').version")"
           version="${version%%+*}"
           tag=""
           if [[ "$version" == *-* ]]; then
@@ -76,15 +81,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm lint
+        run: pnpm --filter @xignet/nest lint
 
       - name: Test
-        run: pnpm test
+        run: pnpm --filter @xignet/nest test
 
       - name: Build
-        run: pnpm build
+        run: pnpm --filter @xignet/nest build
 
       - name: Publish
+        working-directory: packages/nest
         env:
           DIST_TAG: ${{ steps.dist-tag.outputs.tag }}
         run: |

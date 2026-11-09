@@ -3,7 +3,8 @@
 Signet OAuth **machine client** for Node.js. Uses `openid-client` for the
 `client_credentials` protocol and RFC 6749 `client_secret_basic` encoding,
 including client IDs containing colons. Independent of NestJS, Passport, Medusa
-and the existing `@marxbiotech/signet-integration` resource-server package.
+and the [`@xignet/nest`](../nest/README.md) resource-server package
+(formerly `@marxbiotech/signet-integration`).
 
 Requires Node.js **22.22.0 or newer**. Supports CommonJS `require()` and ESM
 named imports. The CommonJS entry loads the ESM protocol library with native
@@ -200,7 +201,7 @@ pnpm --filter @xignet/client typecheck
 pnpm --filter @xignet/client build
 ```
 
-Releases are independent of the existing root package. Bump this package's
+Releases are independent of `@xignet/nest`. Bump this package's
 version and changelog, then push a matching `client-vX.Y.Z` tag. The
 `client-publish.yml` GitHub Actions workflow validates, builds, checks the
 packed artifact and publishes to npm with OIDC. Configure its npm Trusted

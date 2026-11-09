@@ -41,7 +41,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Show what a publish would ship
+      - name: Show what a publish of @xignet/nest would ship
+        working-directory: packages/nest
         run: npm pack --dry-run
 
   client:
