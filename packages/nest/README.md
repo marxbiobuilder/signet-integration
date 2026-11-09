@@ -382,6 +382,13 @@ Nothing is published from a developer machine. The npm Trusted Publisher for
 `@xignet/nest` names GitHub owner `marxbiobuilder`, repository
 `signet-integration`, workflow `nest-publish.yml`.
 
+npm only accepts a Trusted Publisher on a package that already exists, so the
+name is created once by hand, as `@xignet/client` was: an `@xignet` org owner
+publishes a `0.0.0-stage` placeholder under the `stage` dist-tag (never
+`latest`, and never a version a tag will later publish, since npm refuses to
+publish a version twice), then configures the Trusted Publisher, and the first
+real release is the `nest-v0.4.0` tag.
+
 A prerelease goes out the same way, from a release branch named after the
 full version (`release/nest-0.5.0-beta.0`) that is tagged but not merged. Its
 first prerelease identifier becomes the npm dist-tag, so `latest` stays on the

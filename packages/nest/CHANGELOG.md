@@ -185,7 +185,8 @@ principal 由 Passport 掛到 `request.user`；套件提供 helper 讓 401／403
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/nest-v0.4.0...HEAD
+[0.4.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0...nest-v0.4.0
 [0.3.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...v0.1.2
