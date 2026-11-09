@@ -7,6 +7,21 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+改名為 `@xignet/nest`，原 `@marxbiotech/signet-integration` 不再發新版。API 與行為不變：
+把依賴換成 `@xignet/nest`，import 路徑 `@marxbiotech/signet-integration[/passport|/testing]` 改成
+`@xignet/nest[/passport|/testing]` 即可。登入 state 的金鑰推導不變，新舊名稱的 replica 可以互開
+對方封的 state，rolling deploy 不需要同時升級。發佈的檔案集合與 0.3.0 相同，內容只差在
+`package.json`（套件身分）、`README.md`，以及 `dist/login-state.js` 多一段註解與它的 source map。
+
+### Changed
+
+- 套件名 `@marxbiotech/signet-integration` → `@xignet/nest`；原始碼搬到 repository 的
+  `packages/nest`，與 `@xignet/client` 並列。
+- 發版 tag 改為 `nest-vX.Y.Z`，由 `.github/workflows/nest-publish.yml` 發佈；`vX.Y.Z` tag
+  不再觸發發佈。
+
 ## [0.3.0] - 2026-10-20
 
 網頁登入：`SignetLoginStrategy` 以 authorization code + PKCE（public client）
@@ -171,7 +186,8 @@ principal 由 Passport 掛到 `request.user`；套件提供 helper 讓 401／403
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/nest-v0.4.0...HEAD
+[0.4.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0...nest-v0.4.0
 [0.3.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.1...v0.1.2

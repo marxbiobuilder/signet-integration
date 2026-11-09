@@ -37,6 +37,9 @@ export function loginStateKey(secret: string, label: string): Uint8Array {
       'sha256',
       secret,
       new Uint8Array(0),
+      // HKDF info, part of the key rather than the package's name: changing it
+      // stops replicas on another version from opening each other's states
+      // for the length of a rolling deploy.
       '@marxbiotech/signet-integration login state',
       32,
     ),
