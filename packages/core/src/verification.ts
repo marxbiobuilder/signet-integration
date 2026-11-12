@@ -1,19 +1,31 @@
+import { type JWTPayload } from 'jose';
+
 import { JwtVerifier, type VerifiedSignetIdentity } from './jwt-verifier';
 
 export interface VerifiedIdentity extends VerifiedSignetIdentity {
   readonly expiresAt: number;
 }
 
+export interface VerificationFailure {
+  readonly ok: false;
+  readonly kind: 'invalid_token' | 'verification_unavailable';
+  readonly reason: string;
+}
+
 export type VerificationResult =
   | { readonly ok: true; readonly identity: VerifiedIdentity }
-  | {
-      readonly ok: false;
-      readonly kind: 'invalid_token' | 'verification_unavailable';
-      readonly reason: string;
-    };
+  | VerificationFailure;
+
+export type IdTokenVerificationResult =
+  | { readonly ok: true; readonly claims: Readonly<JWTPayload> }
+  | VerificationFailure;
 
 export interface TokenVerifier {
   verifyAccessToken(token: string): Promise<VerificationResult>;
+  verifyIdToken(
+    token: string,
+    clientId: string,
+  ): Promise<IdTokenVerificationResult>;
 }
 
 export interface TokenVerifierOptions {
@@ -52,17 +64,31 @@ function unavailable(reason: string): boolean {
     reason.startsWith('ERR_JOSE_GENERIC:') ||
     [
       'ERR_JWKS_TIMEOUT',
+      'ERR_JWKS_INVALID',
+      'ERR_JWK_INVALID',
+      'ERR_CRYPTO_INVALID_JWK',
       'ECONNREFUSED',
       'ECONNRESET',
       'ENOTFOUND',
       'EAI_AGAIN',
       'ETIMEDOUT',
+      'ENETUNREACH',
+      'EHOSTUNREACH',
+      'EPIPE',
       'ERR_TLS_CERT_ALTNAME_INVALID',
       'CERT_HAS_EXPIRED',
       'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
       'DEPTH_ZERO_SELF_SIGNED_CERT',
     ].includes(reason)
   );
+}
+
+function failure(reason: string): VerificationFailure {
+  return {
+    ok: false,
+    kind: unavailable(reason) ? 'verification_unavailable' : 'invalid_token',
+    reason,
+  };
 }
 
 /** One instance per trusted resource: jose keeps the JWKS cache on it. */
@@ -88,12 +114,7 @@ export function createTokenVerifier(
     async verifyAccessToken(token) {
       const result = await verifier.verify(token);
       if (!result.ok) {
-        return {
-          ...result,
-          kind: unavailable(result.reason)
-            ? 'verification_unavailable'
-            : 'invalid_token',
-        };
+        return failure(result.reason);
       }
       const scopes = Object.freeze([...new Set(result.identity.scopes)]);
       return {
@@ -104,6 +125,10 @@ export function createTokenVerifier(
           expiresAt: result.identity.claims.exp!,
         }),
       };
+    },
+    async verifyIdToken(token, clientId) {
+      const result = await verifier.verifyIdToken(token, clientId);
+      return result.ok ? result : failure(result.reason);
     },
   };
 }

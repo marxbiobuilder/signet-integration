@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { test } from 'node:test';
@@ -23,6 +25,7 @@ async function issuerFixture(t) {
   ];
   let requests = 0;
   let status = 200;
+  let jwksBody;
   let tokenBody;
   let tokenRequests = [];
   let endpointOverride;
@@ -33,7 +36,7 @@ async function issuerFixture(t) {
     if (req.url === '/jwks') {
       requests++;
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ keys }));
+      res.end(jwksBody ?? JSON.stringify({ keys }));
     } else if (req.url === '/.well-known/openid-configuration') {
       res.setHeader('content-type', 'application/json');
       res.end(
@@ -88,6 +91,9 @@ async function issuerFixture(t) {
     },
     fail: () => {
       status = 503;
+    },
+    jwksBody: (value) => {
+      jwksBody = JSON.stringify(value);
     },
     discoveryIssuer: (value) => {
       discoveryIssuer = value;
@@ -169,20 +175,84 @@ test('verifier rejects signature, issuer, audience, lifetime and malformed claim
   }
 });
 
-test('JWKS outage is unavailable; a fresh process accepts rotated keys', async (t) => {
+test('JWKS outage and malformed key sets are verification_unavailable', async (t) => {
   const f = await issuerFixture(t);
   f.fail();
   const result = await createTokenVerifier(f.options).verifyAccessToken(
     await f.token(),
   );
-  assert.equal(result.kind, 'verification_unavailable');
-  const g = await issuerFixture(t);
-  const key = await g.rotate();
-  const rotated = await g.token({}, key.privateKey, 'two');
-  assert.equal(
-    (await createTokenVerifier(g.options).verifyAccessToken(rotated)).ok,
-    true,
+  assert.equal(result.kind, 'verification_unavailable', JSON.stringify(result));
+  for (const body of [
+    {},
+    { keys: {} },
+    { keys: [{ kty: 'RSA', kid: 'one', alg: 'RS256' }] },
+  ]) {
+    const g = await issuerFixture(t);
+    g.jwksBody(body);
+    const result = await createTokenVerifier(g.options).verifyAccessToken(
+      await g.token(),
+    );
+    assert.equal(
+      result.kind,
+      'verification_unavailable',
+      JSON.stringify(result),
+    );
+  }
+});
+
+test('transport unreachable is unavailable but defects still propagate', async (t) => {
+  const f = await issuerFixture(t);
+  const token = await f.token();
+  for (const code of ['ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET']) {
+    const mock = t.mock.method(http, 'get', () => {
+      throw Object.assign(new Error('private transport detail'), { code });
+    });
+    const result = await createTokenVerifier(f.options).verifyAccessToken(
+      token,
+    );
+    assert.equal(
+      result.kind,
+      'verification_unavailable',
+      JSON.stringify(result),
+    );
+    assert.equal(result.reason, code);
+    mock.mock.restore();
+  }
+  t.mock.method(http, 'get', () => {
+    throw new Error('process defect');
+  });
+  await assert.rejects(
+    createTokenVerifier(f.options).verifyAccessToken(token),
+    /process defect/,
   );
+});
+
+test('a shared verifier refreshes rotated JWKS after cooldown', async (t) => {
+  const f = await issuerFixture(t);
+  const verifier = createTokenVerifier(f.options);
+  assert.equal((await verifier.verifyAccessToken(await f.token())).ok, true);
+  const next = await f.rotate();
+  const rotated = await f.token({}, next.privateKey, 'two');
+  assert.equal((await verifier.verifyAccessToken(rotated)).ok, false);
+  assert.equal(f.requests, 1);
+  const now = Date.now();
+  const clock = t.mock.method(Date, 'now', () => now + 31000);
+  try {
+    const refreshed = await verifier.verifyAccessToken(rotated);
+    assert.equal(refreshed.ok, true, JSON.stringify(refreshed));
+    assert.equal(f.requests, 2);
+    assert.equal(
+      (
+        await verifier.verifyAccessToken(
+          await f.token({}, next.privateKey, 'unknown'),
+        )
+      ).ok,
+      false,
+    );
+    assert.equal(f.requests, 2);
+  } finally {
+    clock.mock.restore();
+  }
 });
 
 test('unsafe verifier settings fail before an HTTP request', () => {
@@ -279,10 +349,68 @@ test('OIDC round trip binds state, PKCE, client, resource and both token subject
     begin.transaction.verifier,
   );
   assert.equal(f.tokenRequests[0].get('client_id'), 'web');
+  assert.equal(
+    auth.searchParams.get('code_challenge'),
+    createHash('sha256')
+      .update(f.tokenRequests[0].get('code_verifier'))
+      .digest('base64url'),
+  );
+  assert.equal(f.requests, 1, 'access and ID tokens share one JWKS cache');
   assert.equal('accessToken' in result, false);
   await assert.rejects(
     client.complete({ callbackUrl, transaction: begin.transaction }),
     OidcError,
+  );
+});
+
+test('OIDC reports JWKS outage with safe availability diagnostics', async (t) => {
+  const f = await issuerFixture(t);
+  const options = {
+    ...f.options,
+    clientId: 'web',
+    redirectUri: `${f.options.issuer}/callback`,
+    scopes: ['openid'],
+    admissionScopes: ['cms:access'],
+  };
+  const client = createOidcClient(options);
+  const { transaction } = await client.begin();
+  f.setTokens({
+    access_token: await f.token(),
+    id_token: await f.token({ aud: 'web' }),
+  });
+  f.fail();
+  await assert.rejects(
+    client.complete({
+      callbackUrl: `${options.redirectUri}?state=${transaction.state}&code=one`,
+      transaction,
+    }),
+    (error) => {
+      assert.equal(error.reason, 'verification_unavailable');
+      assert.match(error.detail, /^access_token:ERR_/);
+      assert.equal(error.message.includes(transaction.verifier), false);
+      return true;
+    },
+  );
+});
+
+test('OIDC effective scopes exclude offline_access from either option', () => {
+  const options = {
+    issuer: 'https://issuer.example',
+    audience: 'https://cms.example/api/mcp',
+    jwksUri: 'https://issuer.example/jwks',
+    clientId: 'web',
+    redirectUri: 'https://cms.example/callback',
+    scopes: ['openid'],
+    admissionScopes: ['cms:access'],
+  };
+  assert.throws(() =>
+    createOidcClient({ ...options, scopes: ['openid', 'offline_access'] }),
+  );
+  assert.throws(() =>
+    createOidcClient({
+      ...options,
+      admissionScopes: ['cms:access', 'offline_access'],
+    }),
   );
 });
 

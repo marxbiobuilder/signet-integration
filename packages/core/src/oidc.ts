@@ -2,7 +2,6 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { type JWTPayload } from 'jose';
 
-import { JwtVerifier } from './jwt-verifier';
 import { LoginDiscovery } from './login-discovery';
 import { fetchJson } from './login-http';
 import { codeChallenge, newLoginState } from './login-state';
@@ -44,7 +43,9 @@ export class OidcError extends Error {
       | 'cancelled'
       | 'idp_error'
       | 'token_exchange_failed'
-      | 'token_rejected',
+      | 'token_rejected'
+      | 'verification_unavailable',
+    readonly detail?: string,
   ) {
     super(`OIDC login refused: ${reason}`);
     this.name = 'OidcError';
@@ -77,10 +78,8 @@ export function createOidcClient(options: OidcClientOptions): OidcClient {
     options.allowInsecureLoopback,
   );
   validateScopes([...options.scopes, ...options.admissionScopes]);
-  if (
-    !options.scopes.includes('openid') ||
-    options.scopes.includes('offline_access')
-  ) {
+  const scopes = [...new Set([...options.scopes, ...options.admissionScopes])];
+  if (!scopes.includes('openid') || scopes.includes('offline_access')) {
     throw new Error(
       'Interactive login requires openid and does not retain offline credentials',
     );
@@ -95,13 +94,6 @@ export function createOidcClient(options: OidcClientOptions): OidcClient {
     !options.allowInsecureLoopback,
     timeout,
   );
-  const idVerifier = new JwtVerifier({
-    issuer: options.issuer,
-    audience: options.audience,
-    jwksUri: options.jwksUri,
-    clockToleranceS: options.clockToleranceSeconds ?? 60,
-  });
-  const scopes = [...new Set([...options.scopes, ...options.admissionScopes])];
   const endpoints = async () => {
     const result = await discovery.endpoints();
     trustedUrl(result.authorizationEndpoint, options.allowInsecureLoopback);
@@ -195,18 +187,29 @@ export function createOidcClient(options: OidcClientOptions): OidcClient {
       )
         throw new OidcError('token_exchange_failed');
       const identity = await verifier.verifyAccessToken(body.access_token);
-      if (
-        !identity.ok ||
-        identity.identity.clientId !== options.clientId ||
-        !hasAllScopes(identity.identity, options.admissionScopes)
-      )
-        throw new OidcError('token_rejected');
-      const id = await idVerifier.verifyIdToken(
-        body.id_token,
-        options.clientId,
-      );
-      if (!id.ok || id.claims.sub !== identity.identity.subject)
-        throw new OidcError('token_rejected');
+      if (!identity.ok) {
+        throw new OidcError(
+          identity.kind === 'verification_unavailable'
+            ? 'verification_unavailable'
+            : 'token_rejected',
+          `access_token:${identity.reason}`,
+        );
+      }
+      if (identity.identity.clientId !== options.clientId)
+        throw new OidcError('token_rejected', 'client_id_mismatch');
+      if (!hasAllScopes(identity.identity, options.admissionScopes))
+        throw new OidcError('token_rejected', 'admission_scope_missing');
+      const id = await verifier.verifyIdToken(body.id_token, options.clientId);
+      if (!id.ok) {
+        throw new OidcError(
+          id.kind === 'verification_unavailable'
+            ? 'verification_unavailable'
+            : 'token_rejected',
+          `id_token:${id.reason}`,
+        );
+      }
+      if (id.claims.sub !== identity.identity.subject)
+        throw new OidcError('token_rejected', 'subject_mismatch');
       return { identity: identity.identity, idTokenClaims: id.claims };
     },
   };
