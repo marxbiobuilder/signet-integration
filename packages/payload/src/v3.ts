@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   createTokenVerifier,
   hasAllScopes,
@@ -29,6 +31,9 @@ import type {
   XignetPayloadOptions,
 } from './types.js';
 
+import { createNativeSessions, SESSION_COLLECTION } from './native-session.js';
+import { createLogin } from './login.js';
+
 export type * from './types.js';
 
 class ResourceError extends Error {
@@ -36,12 +41,15 @@ class ResourceError extends Error {
     readonly status: 401 | 403 | 503,
     readonly requiredScopes: readonly string[] = [],
     readonly invalidToken = false,
+    readonly detail?: string,
   ) {
     super('Xignet resource request refused');
+    this.name = 'XignetResourceError';
   }
 }
 
 type Principal = {
+  readonly requestId: string;
   readonly identity: VerifiedIdentity;
   readonly user: TypedUser;
 };
@@ -85,6 +93,13 @@ export function createXignetPayload<TUser extends TypedUser>(
 ): XignetPayloadIntegration {
   const options = Object.freeze({
     ...input,
+    login: input.login
+      ? Object.freeze({
+          ...input.login,
+          scopes: Object.freeze([...input.login.scopes]),
+          session: Object.freeze({ ...input.login.session }),
+        })
+      : undefined,
     admissionScopes: Object.freeze([...input.admissionScopes]),
   });
   const enabled = input.mcp.enabled;
@@ -150,6 +165,27 @@ export function createXignetPayload<TUser extends TypedUser>(
     return undefined;
   };
 
+  const audit = (
+    req: PayloadRequest,
+    operation: string,
+    target: string,
+    outcome: string,
+  ) => {
+    const p = principal(req);
+    if (req.payloadAPI !== 'MCP' || !p) return;
+    req.payload.logger.info({
+      event: 'xignet_mcp_operation',
+      requestId: p.requestId,
+      issuer: p.identity.issuer,
+      subject: p.identity.subject,
+      clientId: p.identity.clientId,
+      userId: p.user.id,
+      operation,
+      target,
+      outcome,
+    });
+  };
+
   const guardAccess =
     (
       existing: Access | undefined,
@@ -198,10 +234,17 @@ export function createXignetPayload<TUser extends TypedUser>(
         operation,
         identity: p.identity,
       });
-      if (required === false) throw new APIError('MCP mutation refused', 403);
+      if (required === false) {
+        audit(args.req, operation, 'mutation', 'denied_by_policy');
+        throw new APIError('MCP mutation refused', 403);
+      }
       validateScopes(required);
-      if (!hasAllScopes(p.identity, [...options.admissionScopes, ...required]))
+      if (
+        !hasAllScopes(p.identity, [...options.admissionScopes, ...required])
+      ) {
+        audit(args.req, operation, 'mutation', 'insufficient_scope');
         throw new APIError('MCP scope insufficient', 403);
+      }
       return args.data;
     };
 
@@ -219,7 +262,10 @@ export function createXignetPayload<TUser extends TypedUser>(
     return result;
   };
 
-  const authenticate = async (req: PayloadRequest): Promise<Principal> => {
+  const authenticate = async (
+    req: PayloadRequest,
+    requestId: string,
+  ): Promise<Principal> => {
     // A previous native cookie/API-key identity cannot substitute for Bearer.
     req.user = null;
     const authorization = req.headers.get('authorization');
@@ -236,6 +282,7 @@ export function createXignetPayload<TUser extends TypedUser>(
         verified.kind === 'verification_unavailable' ? 503 : 401,
         options.admissionScopes,
         true,
+        verified.reason,
       );
     if (!hasAllScopes(verified.identity, options.admissionScopes))
       throw new ResourceError(403, options.admissionScopes);
@@ -253,18 +300,24 @@ export function createXignetPayload<TUser extends TypedUser>(
       throw new Error(
         'Xignet resolver returned an invalid user collection or ID',
       );
-    req.user = resolved.user;
+    req.user = { ...resolved.user, _strategy: 'xignet-mcp' };
     const marker = Object.freeze({});
     const p = Object.freeze({
+      requestId,
       identity: verified.identity,
-      user: resolved.user,
+      user: req.user,
     });
     principals.set(marker, p);
     req.context = { ...req.context, [contextKey]: marker };
     return p;
   };
 
+  const sessions = createNativeSessions(options);
+  const login = createLogin(options, sessions);
   return {
+    ...login,
+    loginEnabled: options.login?.enabled === true,
+    revokeUserSessions: sessions.revokeUserSessions,
     metadata: () =>
       enabled
         ? Response.json(metadata, { headers: { 'cache-control': 'no-store' } })
@@ -290,6 +343,14 @@ export function createXignetPayload<TUser extends TypedUser>(
       for (const slug of Object.keys(globals))
         if (!(config.globals ?? []).some((g) => g.slug === slug))
           throw new Error(`Unknown MCP global: ${slug}`);
+      if ((config.collections ?? []).some((c) => c.slug === SESSION_COLLECTION))
+        throw new Error('Reserved Xignet session collection already exists');
+      config.collections = [
+        ...(config.collections ?? []).map((c) =>
+          c.slug === options.userCollection ? sessions.enhanceUser(c) : c,
+        ),
+        sessions.collection,
+      ];
       const mcpOptions: MCPPluginConfig = {
         disabled: !enabled,
         userCollection: options.userCollection,
@@ -357,8 +418,20 @@ export function createXignetPayload<TUser extends TypedUser>(
           hooks: {
             ...c.hooks,
             beforeChange: [
-              ...(p?.mutationPolicy ? [guardMutation(p)] : []),
               ...(c.hooks?.beforeChange ?? []),
+              ...(p?.mutationPolicy ? [guardMutation(p)] : []),
+            ],
+            afterOperation: [
+              ...(c.hooks?.afterOperation ?? []),
+              (args) => {
+                audit(
+                  args.req,
+                  args.operation,
+                  `collection:${c.slug}`,
+                  'success',
+                );
+                return args.result;
+              },
             ],
           },
         };
@@ -376,8 +449,22 @@ export function createXignetPayload<TUser extends TypedUser>(
           hooks: {
             ...g.hooks,
             beforeChange: [
-              ...(p?.mutationPolicy ? [guardMutation(p)] : []),
               ...(g.hooks?.beforeChange ?? []),
+              ...(p?.mutationPolicy ? [guardMutation(p)] : []),
+            ],
+            afterRead: [
+              ...(g.hooks?.afterRead ?? []),
+              (args) => {
+                audit(args.req, 'find', `global:${g.slug}`, 'success');
+                return args.doc;
+              },
+            ],
+            afterChange: [
+              ...(g.hooks?.afterChange ?? []),
+              (args) => {
+                audit(args.req, 'update', `global:${g.slug}`, 'success');
+                return args.doc;
+              },
             ],
           },
         };
@@ -388,13 +475,41 @@ export function createXignetPayload<TUser extends TypedUser>(
           : {
               ...endpoint,
               handler: async (req) => {
+                const requestId = randomUUID();
                 try {
                   req.payloadAPI = 'MCP';
-                  await authenticate(req);
-                  return await endpoint.handler(req);
+                  await authenticate(req, requestId);
+                  const response = await endpoint.handler(req);
+                  audit(
+                    req,
+                    'request',
+                    options.resource,
+                    `http_${response.status}`,
+                  );
+                  const headers = new Headers(response.headers);
+                  headers.set('cache-control', 'no-store');
+                  headers.set('x-request-id', requestId);
+                  return new Response(response.body, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers,
+                  });
                 } catch (error) {
+                  req.payload.logger.warn({
+                    event: 'xignet_mcp_request_failed',
+                    requestId,
+                    resource: options.resource,
+                    status: error instanceof ResourceError ? error.status : 500,
+                    category: error instanceof Error ? error.name : 'unknown',
+                    ...(error instanceof ResourceError
+                      ? { detail: error.detail }
+                      : {}),
+                  });
                   if (!(error instanceof ResourceError)) throw error;
-                  const headers = new Headers({ 'cache-control': 'no-store' });
+                  const headers = new Headers({
+                    'cache-control': 'no-store',
+                    'x-request-id': requestId,
+                  });
                   if (
                     error.status !== 503 &&
                     (error.status === 401 || error.requiredScopes.length)

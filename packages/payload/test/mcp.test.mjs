@@ -10,6 +10,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { buildConfig, createLocalReq, getPayload } from 'payload';
 import { sqliteAdapter } from '@payloadcms/db-sqlite';
 import { createXignetPayload } from '../dist/v3.js';
+import { createXignetRouteHandlers } from '../dist/next.js';
 
 async function fixture(t) {
   // mcp-handler owns a process-wide cleanup interval with no public dispose.
@@ -219,6 +220,10 @@ async function fixture(t) {
 
 test('official MCP enforces external identity, scopes and Payload access', async (t) => {
   const f = await fixture(t);
+  const auditEvents = [];
+  t.mock.method(f.payload.logger, 'info', (event) => {
+    auditEvents.push(event);
+  });
   await t.test(
     'metadata is canonical and admission requires Bearer, never cookies',
     async () => {
@@ -313,6 +318,26 @@ test('official MCP enforces external identity, scopes and Payload access', async
       );
       assert.ok(other.text.includes('only-for-two'));
       assert.ok(!other.text.includes('visible-for-one'));
+      const [parallelOne, parallelTwo] = await Promise.all([
+        f.request(
+          'tools/call',
+          { name: 'findBulletins', arguments: {} },
+          token,
+        ),
+        f.request(
+          'tools/call',
+          { name: 'findBulletins', arguments: {} },
+          await f.token(undefined, 'two'),
+        ),
+      ]);
+      assert.ok(
+        parallelOne.text.includes('visible-for-one') &&
+          !parallelOne.text.includes('only-for-two'),
+      );
+      assert.ok(
+        parallelTwo.text.includes('only-for-two') &&
+          !parallelTwo.text.includes('visible-for-one'),
+      );
       const denied = await f.request(
         'tools/call',
         { name: 'updateBulletins', arguments: {} },
@@ -387,6 +412,39 @@ test('official MCP enforces external identity, scopes and Payload access', async
     },
   );
   await t.test(
+    'audit events identify operations and clients without credentials or content',
+    async () => {
+      const token = await f.token();
+      await f.request('tools/list', {}, token);
+      const requests = auditEvents.filter(
+        (event) => event.operation === 'request',
+      );
+      assert.ok(requests.length > 1);
+      assert.equal(
+        new Set(requests.map((event) => event.requestId)).size,
+        requests.length,
+      );
+      assert.ok(
+        auditEvents.some(
+          (event) =>
+            /update/i.test(event.operation) &&
+            event.target === 'collection:bulletins' &&
+            event.outcome === 'success',
+        ),
+      );
+      assert.ok(
+        requests.every(
+          (event) =>
+            event.issuer === f.options.issuer &&
+            event.clientId === 'mcp-client' &&
+            event.subject,
+        ),
+      );
+      assert.ok(!JSON.stringify(auditEvents).includes(token));
+      assert.ok(!JSON.stringify(auditEvents).includes('PRIVATE-NEVER-RETURN'));
+    },
+  );
+  await t.test(
     'resolver outage remains a server failure, never an identity refusal',
     async () => {
       f.unavailable();
@@ -428,6 +486,19 @@ test('unsafe or ambiguous MCP policies are rejected at configuration', async () 
     mcp: { ...options.mcp, enabled: false },
   });
   assert.equal(disabled.metadata().status, 404);
+  const disabledRoutes = createXignetRouteHandlers(disabled, {
+    getPayload: async () => {
+      throw new Error('disabled route must not initialize a database');
+    },
+  });
+  assert.equal(
+    (
+      await disabledRoutes.callback(
+        new Request('https://cms.example/auth/xignet/callback'),
+      )
+    ).status,
+    404,
+  );
   const integration = createXignetPayload(options);
   const config = {
     secret: 'fixture-only',

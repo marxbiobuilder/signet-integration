@@ -1,8 +1,8 @@
 # @xignet/payload
 
-Xignet resource authorization for Payload v3. The adapter uses the official MCP plugin and applies token scopes together with existing Payload collection, document and field access. This package is under implementation and has not been published. The current checkpoint implements MCP; OIDC routes, native-session lifecycle and website rollout remain in progress under the [implementation plan](../../docs/architecture/core-payload-implementation-plan.md).
+Xignet resource authorization for Payload v3. The adapter uses the official MCP plugin and applies token scopes together with existing Payload collection, document and field access. This package is under implementation and has not been published. MCP and native-session OIDC are implemented; website rollout and final delivery review remain in progress under the [implementation plan](../../docs/architecture/core-payload-implementation-plan.md).
 
-The current test baseline is Payload and `@payloadcms/plugin-mcp` **3.93.0**. No broad v3 or v4 compatibility is declared. The upstream plugin currently resolves `mcp-handler` 1.1.0 with SDK 1.30.0 despite that handler declaring SDK 1.26.0 as its exact peer; this upstream mismatch must be accounted for in the final supported install matrix. Do not infer compatibility with other versions from these fixture results.
+The current test baseline is Payload and `@payloadcms/plugin-mcp` **3.93.0**. No broad v3 or v4 compatibility is declared. The upstream plugin currently resolves `mcp-handler` 1.1.0 with SDK 1.30.0 despite that handler declaring SDK 1.26.0 as its exact peer; the workspace explicitly acknowledges this one tested combination using pnpm.peerDependencyRules.allowedVersions. Strict-peer pnpm consumers must apply the same narrow rule. This does not permit any other SDK version. Do not infer compatibility with other versions from these fixture results.
 
 ```ts
 import { createXignetPayload } from '@xignet/payload/v3';
@@ -61,3 +61,47 @@ The adapter preserves the original Access return value, including Where document
 ## Validation
 
 `pnpm --filter @xignet/payload test` initializes a temporary SQLite Payload database and sends requests through the actual official MCP handler. It verifies Bearer admission, token claims, local binding/disablement, scope-based tool lists, document/field access, user isolation, forged-context rejection, publication scopes, public access preservation and resolver outage propagation. Fixtures disable automatic types/import-map generation and release upstream MCP cleanup timers; they do not force-exit the test process.
+
+
+## Native-session SSO
+
+Set `login` on the integration:
+
+```ts
+login: {
+  enabled: true,
+  clientId: process.env.XIGNET_WEB_CLIENT_ID!,
+  redirectUri: 'https://cms.example.com/auth/xignet/callback',
+  scopes: ['openid', 'email'],
+  transactionSecret: process.env.XIGNET_LOGIN_TRANSACTION_SECRET!,
+  successRedirect: '/admin',
+  session: { maxAgeSeconds: 7200, absoluteMaxAgeSeconds: 7200 },
+}
+```
+
+Use a dedicated public web client with fixed callback and S256 PKCE, separate from MCP clients. The callback must share the configured CMS origin; redirects remain on that origin. `transactionSecret` must contain at least 32 random bytes. The adapter encrypts/authenticates the entire transaction in a short-lived, host-only HttpOnly SameSite=Lax cookie (Secure on HTTPS). It clears the cookie on completion or failure. Access/ID tokens and refresh credentials are not returned to application JavaScript or stored as browser sessions.
+
+```ts
+const handlers = createXignetRouteHandlers(xignet, {
+  getPayload: async () => getPayload({ config }),
+});
+// Export GET = handlers.login at /auth/xignet/login.
+// Export GET = handlers.callback at /auth/xignet/callback.
+// Export GET = handlers.metadata at the resource's well-known path.
+```
+
+Provide the app's actual Payload instance lazily. SSO-enabled route factories require this provider. SSO requires the native local auth strategy and `useSessions`; MCP-only consumers may use other auth models. The adapter invokes beforeLogin/afterLogin hooks and composes existing refresh hooks. These HTTP login routes return redirects or generic error responses with no token body.
+
+The plugin adds the private `xignet-sessions` collection even while login is disabled. Include it and the official MCP key collection in database migrations. It stores native SID linkage, absolute expiry and the verified access-token identity from login; it never stores the raw access/ID/refresh token. Metadata is not readable/writable through REST/MCP, including by ordinary admin accounts. The project remains responsible for approved `(issuer, subject)` bindings and local roles.
+
+`resolveUser` receives `channel: 'session'` during subsequent SSO authentication and refresh. This is the historical verified identity stored at login, not a newly verified OAuth token: its OAuth expiry may have elapsed. Resolve current local binding/enablement and roles without treating that historical expiry as the browser session expiry. No Xignet network call is required on each native session request.
+
+Native JWTs remain signed by the project's Payload secret and reference a real SID. Refresh cannot cross the stored absolute deadline. Missing/expired metadata and disabled/unbound users observed during authentication invalidate the native SID persistently. For immediate revocation, projects must call revokeUserSessions with the update request from their binding/enablement change hook; this also prevents a disable/re-enable sequence with no intervening request from reviving an old cookie. `integration.revokeUserSessions({ payload, userId, req? })` explicitly removes that user's SSO sessions while retaining independent local sessions. Native logout cleans the current metadata entry. Global Xignet logout is not an automatic CMS logout.
+
+Login failure rolls back SID/metadata when the adapter supports transactions, or explicitly removes the newly created SID/metadata otherwise. Arbitrary external side effects in custom hooks cannot be rolled back by this package. Existing local-password login retains its native expiration and has no SSO marker.
+
+## Auditing and release
+
+The adapter logs structured MCP operation/transport outcomes with a generated request ID and verified issuer/subject/client/local user, without content bodies or credentials. SSO refusals, service failures and revocation have structured events; unexpected exception messages are not copied into HTTP error responses or logs.
+
+Publish core first, then payload under `payload-vX.Y.Z` using `payload-publish.yml`. Configure npm trusted publishing for both new package names before tagging. Only the exact peer baseline above is supported in this prerelease; Node 22.22+ or 24 and a server runtime are required. The package's Next helpers use standard Request/Response and have no Next.js runtime import.

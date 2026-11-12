@@ -62,6 +62,7 @@ export function trustedUrl(value: string, allowInsecureLoopback = false): URL {
 function unavailable(reason: string): boolean {
   return (
     reason.startsWith('ERR_JOSE_GENERIC:') ||
+    reason.startsWith('ERR_XIGNET_JWKS_UNAVAILABLE:') ||
     [
       'ERR_JWKS_TIMEOUT',
       'ERR_JWKS_INVALID',
@@ -104,12 +105,15 @@ export function createTokenVerifier(
       'clockToleranceSeconds must be an integer between 0 and 300',
     );
   }
-  const verifier = new JwtVerifier({
-    issuer: options.issuer,
-    audience: options.audience,
-    jwksUri: options.jwksUri,
-    clockToleranceS: tolerance,
-  });
+  const verifier = new JwtVerifier(
+    {
+      issuer: options.issuer,
+      audience: options.audience,
+      jwksUri: options.jwksUri,
+      clockToleranceS: tolerance,
+    },
+    { classifyIssuerFailures: true },
+  );
   return {
     async verifyAccessToken(token) {
       const result = await verifier.verify(token);

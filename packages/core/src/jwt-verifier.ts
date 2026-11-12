@@ -2,6 +2,7 @@ import {
   createRemoteJWKSet,
   errors,
   type JWTPayload,
+  type JWTVerifyGetKey,
   jwtVerify,
   type RemoteJWKSetOptions,
 } from 'jose';
@@ -136,13 +137,41 @@ function scopesOf(payload: JWTPayload): string[] | null {
 // request would refetch the whole JWKS on every request and defeat the
 // cache.
 export class JwtVerifier {
-  private readonly keys: ReturnType<typeof createRemoteJWKSet>;
+  private readonly keys: JWTVerifyGetKey;
 
-  constructor(private readonly settings: JwtSettings) {
-    this.keys = createRemoteJWKSet(
+  constructor(
+    private readonly settings: JwtSettings,
+    options?: { classifyIssuerFailures?: boolean },
+  ) {
+    const keys = createRemoteJWKSet(
       new URL(settings.jwksUri),
       REMOTE_JWKS_OPTIONS,
     );
+    this.keys = !options?.classifyIssuerFailures
+      ? keys
+      : async (...args) => {
+          try {
+            return await keys(...args);
+          } catch (error) {
+            // Unknown kid remains an invalid credential. Other JOSE/key-import
+            // or transport failures here originate at the issuer key boundary,
+            // including Node 22's generic ERR_INVALID_ARG_TYPE for bad JWKs.
+            if (
+              error instanceof errors.JWKSNoMatchingKey ||
+              error instanceof errors.JWKSMultipleMatchingKeys
+            )
+              throw error;
+            const code: unknown = (error as { code?: unknown } | null)?.code;
+            if (typeof code !== 'string') throw error;
+            const wrapped = new errors.JOSEError(
+              'Issuer key retrieval or import failed',
+            );
+            Object.defineProperty(wrapped, 'code', {
+              value: `ERR_XIGNET_JWKS_UNAVAILABLE:${error instanceof errors.JOSEError ? joseRejection(error) : code}`,
+            });
+            throw wrapped;
+          }
+        };
   }
 
   async verify(token: string): Promise<VerifyResult> {

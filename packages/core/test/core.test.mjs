@@ -215,7 +215,7 @@ test('transport unreachable is unavailable but defects still propagate', async (
       'verification_unavailable',
       JSON.stringify(result),
     );
-    assert.equal(result.reason, code);
+    assert.equal(result.reason, `ERR_XIGNET_JWKS_UNAVAILABLE:${code}`);
     mock.mock.restore();
   }
   t.mock.method(http, 'get', () => {

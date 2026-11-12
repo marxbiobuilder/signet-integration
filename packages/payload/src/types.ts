@@ -16,7 +16,7 @@ export type UserResolution<TUser extends TypedUser = TypedUser> =
 
 export type ResolveUser<TUser extends TypedUser = TypedUser> = (input: {
   identity: VerifiedIdentity;
-  channel: 'login' | 'mcp';
+  channel: 'login' | 'mcp' | 'session';
   payload: Payload;
   login?: { idTokenClaims: Readonly<Record<string, unknown>> };
 }) => Promise<UserResolution<TUser>>;
@@ -53,6 +53,18 @@ export interface XignetPayloadOptions<
   readonly admissionScopes: readonly string[];
   readonly userCollection: CollectionSlug;
   readonly resolveUser: ResolveUser<TUser>;
+  readonly login?: {
+    readonly enabled: boolean;
+    readonly clientId: string;
+    readonly redirectUri: string;
+    readonly scopes: readonly string[];
+    readonly transactionSecret: string;
+    readonly successRedirect: string;
+    readonly session: {
+      readonly maxAgeSeconds: number;
+      readonly absoluteMaxAgeSeconds: number;
+    };
+  };
   readonly mcp: {
     readonly enabled: boolean;
     readonly collections: Readonly<Record<string, EntityPolicy>>;
@@ -63,7 +75,15 @@ export interface XignetPayloadOptions<
 }
 
 export interface XignetPayloadIntegration {
+  readonly loginEnabled: boolean;
   plugin(): Plugin;
   /** HTTP metadata response; mount at the resource's well-known path. */
   metadata(): Response;
+  login(request: Request): Promise<Response>;
+  callback(request: Request, payload: Payload): Promise<Response>;
+  revokeUserSessions(input: {
+    payload: Payload;
+    userId: string | number;
+    req?: PayloadRequest;
+  }): Promise<void>;
 }
