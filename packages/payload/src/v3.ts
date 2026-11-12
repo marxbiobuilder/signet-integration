@@ -33,7 +33,7 @@ import type {
 
 import { createNativeSessions, SESSION_COLLECTION } from './native-session.js';
 import { createLogin } from './login.js';
-import { inspectRpc, rpcMethod } from './rpc-audit.js';
+import { inspectRpc, observeRpc, rpcMethod } from './rpc-audit.js';
 
 export type * from './types.js';
 
@@ -346,10 +346,15 @@ export function createXignetPayload<TUser extends TypedUser>(
     response: { content: Array<{ text: string; type: string }> },
     doc: Record<string, unknown>,
     req: PayloadRequest,
+    collection = true,
   ) => {
     const p = principal(req);
     if (p) {
-      const hasErrors = Array.isArray(doc.errors) && doc.errors.length > 0;
+      // Only collection bulk result envelopes carry operation errors.
+      // Single documents always have an ID; globals cannot be bulk updated.
+      const bulk = collection && !('id' in doc) && Array.isArray(doc.docs);
+      const hasErrors =
+        bulk && Array.isArray(doc.errors) && doc.errors.length > 0;
       const hasSuccesses = Array.isArray(doc.docs) && doc.docs.length > 0;
       if (hasErrors && hasSuccesses) p.rpc.outcome = 'partial_failure';
       else if (p.rpc.outcome !== 'denied')
@@ -417,7 +422,8 @@ export function createXignetPayload<TUser extends TypedUser>(
             slug,
             {
               enabled: { find: Boolean(p.find), update: Boolean(p.update) },
-              overrideResponse: toolResponse,
+              overrideResponse: (response, doc, req) =>
+                toolResponse(response, doc, req, false),
             },
           ]),
         ),
@@ -478,6 +484,9 @@ export function createXignetPayload<TUser extends TypedUser>(
                   `collection:${c.slug}`,
                   args.result &&
                     typeof args.result === 'object' &&
+                    !('id' in args.result) &&
+                    'docs' in args.result &&
+                    Array.isArray(args.result.docs) &&
                     'errors' in args.result &&
                     Array.isArray(args.result.errors) &&
                     args.result.errors.length
@@ -554,29 +563,30 @@ export function createXignetPayload<TUser extends TypedUser>(
                   )
                     p.rpc.outcome = 'denied';
                   const response = await endpoint.handler(req);
-                  const reply = await inspectRpc(response.clone());
-                  const isError =
-                    reply?.error ||
-                    (reply?.result &&
-                      typeof reply.result === 'object' &&
-                      'isError' in reply.result &&
-                      reply.result.isError === true);
-                  let outcome = 'unobserved';
-                  if (rpc) {
-                    if (p.rpc.outcome === 'denied') outcome = 'denied';
-                    else if (isError || response.status >= 400)
-                      outcome = 'failed';
-                    else if (p.rpc.outcome) outcome = p.rpc.outcome;
-                    else if (reply?.result && method !== 'tools/call')
-                      outcome = 'success';
-                  }
-                  audit(
-                    req,
-                    method,
-                    target ??
-                      (method === 'tools/call' ? 'unknown_tool' : 'protocol'),
-                    outcome,
-                  );
+                  const body = observeRpc(response, (reply, completed) => {
+                    const isError =
+                      reply?.error ||
+                      (reply?.result &&
+                        typeof reply.result === 'object' &&
+                        'isError' in reply.result &&
+                        reply.result.isError === true);
+                    let outcome = 'unobserved';
+                    if (rpc && completed) {
+                      if (p.rpc.outcome === 'denied') outcome = 'denied';
+                      else if (isError || response.status >= 400)
+                        outcome = 'failed';
+                      else if (p.rpc.outcome) outcome = p.rpc.outcome;
+                      else if (reply?.result && method !== 'tools/call')
+                        outcome = 'success';
+                    }
+                    audit(
+                      req,
+                      method,
+                      target ??
+                        (method === 'tools/call' ? 'unknown_tool' : 'protocol'),
+                      outcome,
+                    );
+                  });
                   audit(
                     req,
                     'request',
@@ -586,7 +596,7 @@ export function createXignetPayload<TUser extends TypedUser>(
                   const headers = new Headers(response.headers);
                   headers.set('cache-control', 'no-store');
                   headers.set('x-request-id', requestId);
-                  return new Response(response.body, {
+                  return new Response(body, {
                     status: response.status,
                     statusText: response.statusText,
                     headers,

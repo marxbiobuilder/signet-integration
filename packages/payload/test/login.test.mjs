@@ -579,3 +579,42 @@ test('transaction failures are observable and never issue a login cookie', async
   );
   assert.ok(!JSON.stringify(events).includes('private-'));
 });
+
+test('metadata failure cannot conceal a nested rollback failure', async (t) => {
+  const f = await fixture(t, true);
+  const events = [];
+  t.mock.method(f.payload.logger, 'error', (event) => events.push(event));
+  const before = await f.payload.count({
+    collection: 'xignet-sessions',
+    overrideAccess: true,
+  });
+  const rollback = f.payload.db.rollbackTransaction.bind(f.payload.db);
+  const rollbackMock = t.mock.method(
+    f.payload.db,
+    'rollbackTransaction',
+    async (id) => {
+      await rollback(id);
+      if (id !== undefined) throw new Error('private-nested-rollback-failure');
+    },
+  );
+  f.payload.collections['xignet-sessions'].config.hooks.beforeChange.push(
+    () => {
+      throw new Error('private-metadata-write-failure');
+    },
+  );
+  const result = await f.complete(await f.begin());
+  rollbackMock.mock.restore();
+  assert.equal(result.response.status, 503);
+  assert.equal(result.cookie, undefined);
+  assert.ok(events.some((e) => e.event === 'xignet_login_cleanup_failed'));
+  assert.ok(!JSON.stringify(events).includes('private-'));
+  assert.equal(
+    (
+      await f.payload.count({
+        collection: 'xignet-sessions',
+        overrideAccess: true,
+      })
+    ).totalDocs,
+    before.totalDocs,
+  );
+});

@@ -77,6 +77,7 @@ async function fixture(t) {
           },
         },
       },
+      globals: { 'site-status': { find: { scopes: ['cms:read'] } } },
       scopesSupported: ['cms:publish'],
     },
   };
@@ -111,6 +112,16 @@ async function fixture(t) {
         fields: [
           { name: 'title', type: 'text', required: true },
           { name: 'isPublic', type: 'checkbox', defaultValue: true },
+          {
+            name: 'errors',
+            type: 'array',
+            fields: [{ name: 'message', type: 'text' }],
+          },
+          {
+            name: 'docs',
+            type: 'array',
+            fields: [{ name: 'title', type: 'text' }],
+          },
           { name: 'owner', type: 'relationship', relationTo: 'users' },
           { name: 'privateNote', type: 'text', access: { read: () => false } },
         ],
@@ -119,6 +130,15 @@ async function fixture(t) {
         slug: 'restricted',
         access: { read: () => true },
         fields: [{ name: 'title', type: 'text' }],
+      },
+    ],
+    globals: [
+      {
+        slug: 'site-status',
+        fields: [
+          { name: 'errors', type: 'json' },
+          { name: 'docs', type: 'json' },
+        ],
       },
     ],
     plugins: [xignet.plugin()],
@@ -153,11 +173,17 @@ async function fixture(t) {
       title: 'visible-for-one',
       owner: one.id,
       privateNote: 'PRIVATE-NEVER-RETURN',
+      errors: [{ message: 'business-error-not-an-operation-failure' }],
+      docs: [{ title: 'business-document-field' }],
     },
   });
   await payload.create({
     collection: 'bulletins',
     data: { title: 'only-for-two', owner: two.id },
+  });
+  await payload.updateGlobal({
+    slug: 'site-status',
+    data: { errors: ['business-error'], docs: ['business-document'] },
   });
   const endpoint = payload.config.endpoints.find(
     (e) => e.path === '/mcp' && e.method === 'post',
@@ -308,7 +334,7 @@ test('official MCP enforces external identity, scopes and Payload access', async
       assert.equal(list.response.status, 200);
       assert.deepEqual(
         list.data.result.tools.map((tool) => tool.name),
-        ['findBulletins'],
+        ['findBulletins', 'findSiteStatus'],
       );
       const read = await f.request(
         'tools/call',
@@ -316,6 +342,29 @@ test('official MCP enforces external identity, scopes and Payload access', async
         token,
       );
       assert.ok(read.text.includes('visible-for-one'), read.text);
+      assert.ok(read.text.includes('business-error-not-an-operation-failure'));
+      assert.equal(
+        auditEvents.find(
+          (e) =>
+            e.operation === 'tools/call' &&
+            e.requestId === read.response.headers.get('x-request-id'),
+        ).outcome,
+        'success',
+      );
+      const globalRead = await f.request(
+        'tools/call',
+        { name: 'findSiteStatus', arguments: {} },
+        token,
+      );
+      assert.ok(globalRead.text.includes('business-error'));
+      assert.equal(
+        auditEvents.find(
+          (e) =>
+            e.operation === 'tools/call' &&
+            e.requestId === globalRead.response.headers.get('x-request-id'),
+        ).outcome,
+        'success',
+      );
       assert.ok(!read.text.includes('only-for-two'));
       assert.ok(!read.text.includes('PRIVATE-NEVER-RETURN'));
       const other = await f.request(

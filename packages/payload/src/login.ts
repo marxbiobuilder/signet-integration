@@ -28,6 +28,13 @@ import {
 } from './native-session.js';
 import type { XignetPayloadOptions } from './types.js';
 
+class LoginTransactionInterrupted extends Error {
+  constructor() {
+    super('Owned login transaction was interrupted by a nested operation');
+    this.name = 'LoginTransactionInterrupted';
+  }
+}
+
 export function createLogin<TUser extends TypedUser>(
   options: XignetPayloadOptions<TUser>,
   sessions: ReturnType<typeof createNativeSessions<TUser>>,
@@ -113,6 +120,7 @@ export function createLogin<TUser extends TypedUser>(
       const req = await createLocalReq({ req: request.clone() }, payload);
       req.payloadAPI = 'REST';
       let ownTransaction = false;
+      let ownedTransactionID: string | number | undefined;
       let createdSession: { sid: string; userId: string | number } | undefined;
       try {
         const values = (request.headers.get('cookie') ?? '')
@@ -148,6 +156,7 @@ export function createLogin<TUser extends TypedUser>(
         )
           throw new APIError('SSO access denied', 403);
         ownTransaction = await initTransaction(req);
+        if (ownTransaction) ownedTransactionID = await req.transactionID;
         const collectionConfig =
           payload.collections[options.userCollection].config;
         let user = (await payload.db.findOne({
@@ -245,7 +254,11 @@ export function createLogin<TUser extends TypedUser>(
           status: 303,
           headers: successHeaders,
         });
-        if (ownTransaction) await commitTransaction(req);
+        if (ownTransaction) {
+          if (req.transactionID !== ownedTransactionID)
+            throw new LoginTransactionInterrupted();
+          await commitTransaction(req);
+        }
         return response;
       } catch (error) {
         try {
@@ -253,7 +266,12 @@ export function createLogin<TUser extends TypedUser>(
             // Payload's killTransaction swallows adapter rollback errors.
             // This callback owns the transaction and must observe failures.
             try {
-              await payload.db.rollbackTransaction(await req.transactionID!);
+              const interrupted = req.transactionID !== ownedTransactionID;
+              await payload.db.rollbackTransaction(ownedTransactionID!);
+              // Nested Local API operations may call killTransaction first,
+              // suppress rollback errors and remove req.transactionID. The
+              // adapter cannot establish cleanup success in that case.
+              if (interrupted) throw new LoginTransactionInterrupted();
             } finally {
               delete req.transactionID;
             }
