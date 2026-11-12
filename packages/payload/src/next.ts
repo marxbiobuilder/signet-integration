@@ -14,7 +14,17 @@ export function createXignetRouteHandlers(
     callback: async (request: Request) => {
       if (!integration.loginEnabled || !options)
         return new Response(null, { status: 404 });
-      return integration.callback(request, await options.getPayload());
+      const payload = await options.getPayload();
+      if (!payload.config.serverURL)
+        return integration.callback(request, payload);
+      // Standalone Next requests may use an internal hostname and port.
+      // Only configured serverURL supplies the public origin, never headers.
+      const incoming = new URL(request.url);
+      const callback = new URL(payload.config.serverURL);
+      callback.pathname = incoming.pathname;
+      callback.search = incoming.search;
+      callback.hash = incoming.hash;
+      return integration.callback(new Request(callback, request), payload);
     },
   };
 }

@@ -92,6 +92,8 @@ const handlers = createXignetRouteHandlers(xignet, {
 
 Provide the app's actual Payload instance lazily. SSO-enabled route factories require this provider. SSO requires the native local auth strategy and `useSessions`; MCP-only consumers may use other auth models. The adapter invokes beforeLogin/afterLogin hooks and composes existing refresh hooks. These HTTP login routes return redirects or generic error responses with no token body.
 
+Next standalone can expose its internal hostname and port in `Request.url`. The Next callback handler uses the trusted Payload `serverURL` as its public origin while retaining the incoming path and query for OIDC validation. Configure `serverURL` to the canonical CMS origin; Host and forwarded-host headers never select that origin. Direct `integration.callback` callers must supply the canonical public request URL themselves.
+
 The plugin adds the private `xignet-sessions` collection even while login is disabled. Include it and the official MCP key collection in database migrations. It stores native SID linkage, absolute expiry and the verified access-token identity from login; it never stores the raw access/ID/refresh token. Metadata is not readable/writable through REST/MCP, including by ordinary admin accounts. The project remains responsible for approved `(issuer, subject)` bindings and local roles.
 
 `resolveUser` receives `channel: 'session'` during subsequent SSO authentication and refresh. This is the historical verified identity stored at login, not a newly verified OAuth token: its OAuth expiry may have elapsed. Resolve current local binding/enablement and roles without treating that historical expiry as the browser session expiry. No Xignet network call is required on each native session request.
@@ -111,3 +113,7 @@ RPC audit events use the server-generated request ID, principal, allowlisted met
 The database adapter must provide read-after-write consistency for login session records. Before issuing the browser cookie, the callback confirms the native SID and private metadata with fresh reads outside the completed transaction, since some adapter commit helpers can suppress an underlying transaction failure. A missing record refuses login instead of issuing an unusable cookie.
 
 For staged rollout, configure the final collection/global policies once and set `mcp.writesEnabled: false` to hide and deny create/update while retaining the same schema. Set it to true after write/publish validation; omission preserves the default of enabling configured operations. `mcp.enabled` and `login.enabled` also retain their private collections when disabled.
+
+## Reusing the adapter
+
+Each CMS supplies its own canonical resource/serverURL, web client, secrets, auth collection, local resolver and collection/global policies. Keep project binding and role rules in that resolver and call `revokeUserSessions` from local lifecycle hooks; mount the shared Next handlers rather than copying the OIDC flow. Tests cover a second CMS profile with a `members` auth collection, separate origin/client/admission scope, native login, refresh and revocation. This fixture verifies configurable reuse; it is not a claim that a second production project has been deployed.

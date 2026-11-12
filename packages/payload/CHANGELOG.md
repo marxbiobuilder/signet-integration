@@ -3,6 +3,7 @@
 ## 0.1.0-beta.1
 
 - Validate GitHub Actions OIDC publishing after initial package registration.
+- Normalize Next standalone callback origins from trusted Payload serverURL while preserving callback path/state validation.
 
 ## 0.1.0-beta.0
 

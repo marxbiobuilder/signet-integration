@@ -18,7 +18,16 @@ import { sqliteAdapter } from '@payloadcms/db-sqlite';
 import { createXignetPayload } from '../dist/v3.js';
 import { createXignetRouteHandlers } from '../dist/next.js';
 
-async function fixture(t, transactions = false) {
+async function fixture(
+  t,
+  transactions = false,
+  {
+    userCollection = 'users',
+    cmsOrigin = 'https://cms.example.test',
+    clientId = 'website-web',
+    admissionScope = 'cms:access',
+  } = {},
+) {
   const folder = await mkdtemp(join(tmpdir(), 'xignet-sso-'));
   const keys = await generateKeyPair('RS256');
   const jwk = {
@@ -28,15 +37,14 @@ async function fixture(t, transactions = false) {
   };
   const codes = new Map();
   let issuer;
-  const cmsOrigin = 'https://cms.example.test';
   let hooks = { before: 0, after: 0 };
   const sign = (subject, audience, extra = {}) =>
     new SignJWT({
       iss: issuer,
       aud: audience,
       sub: subject,
-      client_id: 'website-web',
-      scope: 'openid email cms:access',
+      client_id: clientId,
+      scope: `openid email ${admissionScope}`,
       exp: Math.floor(Date.now() / 1000) + 120,
       ...extra,
     })
@@ -61,7 +69,7 @@ async function fixture(t, transactions = false) {
       codes.delete(params.get('code'));
       if (
         !entry ||
-        params.get('client_id') !== 'website-web' ||
+        params.get('client_id') !== clientId ||
         params.get('redirect_uri') !== `${cmsOrigin}/auth/xignet/callback` ||
         createHash('sha256')
           .update(params.get('code_verifier') ?? '')
@@ -73,7 +81,7 @@ async function fixture(t, transactions = false) {
       return res.end(
         JSON.stringify({
           access_token: await sign(entry.subject, `${cmsOrigin}/api/mcp`),
-          id_token: await sign(entry.subject, 'website-web', {
+          id_token: await sign(entry.subject, clientId, {
             email: 'display@example.test',
           }),
         }),
@@ -90,24 +98,27 @@ async function fixture(t, transactions = false) {
     jwksUri: `${issuer}/jwks`,
     resource: `${cmsOrigin}/api/mcp`,
     allowInsecureLoopback: true,
-    admissionScopes: ['cms:access'],
-    userCollection: 'users',
+    admissionScopes: [admissionScope],
+    userCollection,
     resolveUser: async ({ identity, payload }) => {
       const { docs } = await payload.find({
-        collection: 'users',
+        collection: userCollection,
         where: { subject: { equals: identity.subject } },
         limit: 1,
         overrideAccess: true,
       });
       if (!docs[0]) return { status: 'denied', reason: 'unbound' };
       return docs[0].enabled
-        ? { status: 'allowed', user: { ...docs[0], collection: 'users' } }
+        ? {
+            status: 'allowed',
+            user: { ...docs[0], collection: userCollection },
+          }
         : { status: 'denied', reason: 'disabled' };
     },
     mcp: { enabled: false, collections: {} },
     login: {
       enabled: true,
-      clientId: 'website-web',
+      clientId,
       redirectUri: `${cmsOrigin}/auth/xignet/callback`,
       scopes: ['openid', 'email'],
       transactionSecret: randomBytes(32).toString('hex'),
@@ -119,7 +130,7 @@ async function fixture(t, transactions = false) {
     secret: randomBytes(32).toString('hex'),
     serverURL: cmsOrigin,
     telemetry: false,
-    admin: { user: 'users', importMap: { autoGenerate: false } },
+    admin: { user: userCollection, importMap: { autoGenerate: false } },
     typescript: { autoGenerate: false },
     db: sqliteAdapter({
       client: { url: `file:${folder}/test.sqlite` },
@@ -128,7 +139,7 @@ async function fixture(t, transactions = false) {
     }),
     collections: [
       {
-        slug: 'users',
+        slug: userCollection,
         auth: { useSessions: true, tokenExpiration: 3600 },
         hooks: {
           beforeLogin: [
@@ -185,7 +196,7 @@ async function fixture(t, transactions = false) {
     await rm(folder, { recursive: true, force: true });
   });
   const user = await payload.create({
-    collection: 'users',
+    collection: userCollection,
     data: {
       email: 'one@example.test',
       password: 'fixture-only-password-long',
@@ -196,7 +207,7 @@ async function fixture(t, transactions = false) {
   const handlers = createXignetRouteHandlers(integration, {
     getPayload: async () => payload,
   });
-  const requestFor = (cookie, path = '/api/users/me') =>
+  const requestFor = (cookie, path = `/api/${userCollection}/me`) =>
     new Request(`${cmsOrigin}${path}`, {
       headers: { cookie, origin: cmsOrigin },
     });
@@ -231,12 +242,13 @@ async function fixture(t, transactions = false) {
         url: `${cmsOrigin}/auth/xignet/callback?state=${auth.searchParams.get('state')}&code=${code}`,
       };
     },
-    async complete(begin) {
+    async complete(begin, headers = {}) {
       const response = await handlers.callback(
         new Request(begin.url, {
           headers: {
             cookie: begin.cookie,
             'x-login-context': 'callback-context',
+            ...headers,
           },
         }),
       );
@@ -252,7 +264,10 @@ async function fixture(t, transactions = false) {
       assert.ok(result.cookie);
       return result;
     },
-    async authenticatedReq(cookie, path = '/api/users/refresh-token') {
+    async authenticatedReq(
+      cookie,
+      path = `/api/${userCollection}/refresh-token`,
+    ) {
       const request = requestFor(cookie, path);
       const { user } = await payload.auth({ headers: request.headers });
       assert.ok(user);
@@ -300,6 +315,38 @@ test('SSO creates native Payload sessions with bounded refresh and revocation', 
       assert.deepEqual(f.hooks.afterContext, f.hooks.beforeContext);
       assert.equal(f.hooks.chainedValue, 'from-first-hook');
       assert.equal((await f.complete(begin)).response.status, 401);
+    },
+  );
+  await t.test(
+    'Next callbacks use configured public origin and retain path validation',
+    async () => {
+      const begin = await f.begin();
+      const incoming = new URL(begin.url);
+      const proxied = {
+        ...begin,
+        url: `https://0.0.0.0:3050${incoming.pathname}${incoming.search}`,
+      };
+      const result = await f.complete(proxied, {
+        host: 'untrusted.example.test',
+        'x-forwarded-host': 'untrusted.example.test',
+        'x-forwarded-proto': 'http',
+      });
+      assert.equal(result.response.status, 303);
+      assert.equal(
+        result.response.headers.get('location'),
+        `${f.cmsOrigin}/admin`,
+      );
+      assert.equal(
+        (await f.payload.auth({ headers: f.requestFor(result.cookie).headers }))
+          .user.id,
+        f.user.id,
+      );
+      const wrongPath = await f.begin();
+      wrongPath.url = wrongPath.url.replace(
+        '/auth/xignet/callback?',
+        '/wrong/callback?',
+      );
+      assert.equal((await f.complete(wrongPath)).response.status, 401);
     },
   );
   await t.test(
@@ -658,4 +705,37 @@ test('a fulfilled Drizzle commit cannot issue a cookie after underlying rollback
     where: { id: { equals: f.user.id } },
   });
   assert.equal(user.sessions?.length ?? 0, 0);
+});
+
+test('another CMS reuses SSO with its own auth collection and trust configuration', async (t) => {
+  const f = await fixture(t, false, {
+    userCollection: 'members',
+    cmsOrigin: 'https://members.example.test',
+    clientId: 'members-web',
+    admissionScope: 'members:access',
+  });
+  const begin = await f.begin();
+  assert.ok(begin.cookie.startsWith('xignet_login.members='));
+  const signed = await f.complete(begin);
+  assert.equal(signed.response.status, 303);
+  assert.equal(signed.response.headers.get('location'), `${f.cmsOrigin}/admin`);
+  const auth = await f.payload.auth({
+    headers: f.requestFor(signed.cookie).headers,
+  });
+  assert.equal(auth.user.collection, 'members');
+  assert.equal(auth.user.id, f.user.id);
+  const refreshed = await refreshOperation({
+    collection: f.payload.collections.members,
+    req: await f.authenticatedReq(signed.cookie),
+  });
+  assert.equal(decodeJwt(refreshed.refreshedToken).collection, 'members');
+  await f.integration.revokeUserSessions({
+    payload: f.payload,
+    userId: f.user.id,
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
+  );
 });
