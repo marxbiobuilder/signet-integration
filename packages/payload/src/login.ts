@@ -16,7 +16,6 @@ import {
   getFieldsToSign,
   initTransaction,
   jwtSign,
-  killTransaction,
   type Payload,
   type TypedUser,
 } from 'payload';
@@ -111,7 +110,8 @@ export function createLogin<TUser extends TypedUser>(
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
       });
-      const req = await createLocalReq({}, payload);
+      const req = await createLocalReq({ req: request.clone() }, payload);
+      req.payloadAPI = 'REST';
       let ownTransaction = false;
       let createdSession: { sid: string; userId: string | number } | undefined;
       try {
@@ -214,15 +214,22 @@ export function createLogin<TUser extends TypedUser>(
         user._sid = sid;
         user._strategy = 'local-jwt';
         req.user = user;
-        for (const hook of collectionConfig.hooks.afterLogin)
-          await hook({
-            collection: collectionConfig,
-            context: req.context,
-            req,
-            user,
-            token: signed.token,
-          });
-        headers.append(
+        for (const hook of collectionConfig.hooks.afterLogin) {
+          user =
+            (await hook({
+              collection: collectionConfig,
+              context: req.context,
+              req,
+              user,
+              token: signed.token,
+            })) || user;
+          if (user.id !== resolved.user.id)
+            throw new APIError('SSO user mismatch', 403);
+        }
+        // Error responses may only clear the transaction cookie, including
+        // when committing the database transaction fails after signing.
+        const successHeaders = new Headers(headers);
+        successHeaders.append(
           'set-cookie',
           generatePayloadCookie({
             collectionAuthConfig: {
@@ -233,14 +240,24 @@ export function createLogin<TUser extends TypedUser>(
             token: signed.token,
           }),
         );
-        headers.set('location', success.toString());
-        const response = new Response(null, { status: 303, headers });
+        successHeaders.set('location', success.toString());
+        const response = new Response(null, {
+          status: 303,
+          headers: successHeaders,
+        });
         if (ownTransaction) await commitTransaction(req);
         return response;
       } catch (error) {
         try {
-          if (ownTransaction) await killTransaction(req);
-          else if (createdSession)
+          if (ownTransaction) {
+            // Payload's killTransaction swallows adapter rollback errors.
+            // This callback owns the transaction and must observe failures.
+            try {
+              await payload.db.rollbackTransaction(await req.transactionID!);
+            } finally {
+              delete req.transactionID;
+            }
+          } else if (createdSession)
             await sessions.revokeSession(
               req,
               createdSession.userId,

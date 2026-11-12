@@ -43,6 +43,7 @@ async function fixture(t) {
   await once(server, 'listening');
   const issuer = `http://127.0.0.1:${server.address().port}`;
   let resolverUnavailable = false;
+  const checkedDocuments = [];
   const options = {
     issuer,
     jwksUri: `${issuer}/jwks`,
@@ -70,7 +71,10 @@ async function fixture(t) {
         bulletins: {
           find: { scopes: ['cms:read'] },
           update: { scopes: ['cms:write'] },
-          mutationPolicy: () => ['cms:publish'],
+          mutationPolicy: ({ originalDoc }) => {
+            checkedDocuments.push(originalDoc?.id);
+            return originalDoc?.isPublic === false ? [] : ['cms:publish'];
+          },
         },
       },
       scopesSupported: ['cms:publish'],
@@ -101,10 +105,12 @@ async function fixture(t) {
         access: {
           read: ({ req }) =>
             req.user ? { owner: { equals: req.user.id } } : true,
-          update: ({ req }) => Boolean(req.user),
+          update: ({ req }) =>
+            Boolean(req.user) && !req.headers.has('x-test-deny-update'),
         },
         fields: [
           { name: 'title', type: 'text', required: true },
+          { name: 'isPublic', type: 'checkbox', defaultValue: true },
           { name: 'owner', type: 'relationship', relationTo: 'users' },
           { name: 'privateNote', type: 'text', access: { read: () => false } },
         ],
@@ -161,6 +167,7 @@ async function fixture(t) {
     payload,
     options,
     xignet,
+    checkedDocuments,
     one,
     doc,
     unavailable: () => {
@@ -381,40 +388,126 @@ test('official MCP enforces external identity, scopes and Payload access', async
           (tool) => tool.name === 'updateBulletins',
         ),
       );
-      await assert.rejects(
-        f.payload.update({
-          collection: 'bulletins',
-          id: f.doc.id,
-          data: { title: 'must-not-publish' },
-          req: request.req,
-          overrideAccess: false,
-        }),
-        /scope insufficient/,
+      const denied = await f.request(
+        'tools/call',
+        {
+          name: 'updateBulletins',
+          arguments: { id: f.doc.id, title: 'must-not-publish' },
+        },
+        await f.token('cms:access cms:read cms:write'),
       );
+      assert.match(denied.text, /MCP scope insufficient/);
       assert.equal(
         (await f.payload.findByID({ collection: 'bulletins', id: f.doc.id }))
           .title,
         'visible-for-one',
       );
-      const authorized = await f.request(
-        'tools/list',
-        {},
+      const deniedByAccess = await f.request(
+        'tools/call',
+        {
+          name: 'updateBulletins',
+          arguments: { id: f.doc.id, title: 'must-not-pass-local-access' },
+        },
+        await f.token('cms:access cms:read cms:write cms:publish'),
+        { 'x-test-deny-update': 'true' },
+      );
+      const localDenial = auditEvents.find(
+        (event) =>
+          event.operation === 'tools/call' &&
+          event.requestId ===
+            deniedByAccess.response.headers.get('x-request-id'),
+      );
+      assert.equal(localDenial.outcome, 'denied');
+      assert.equal(
+        (await f.payload.findByID({ collection: 'bulletins', id: f.doc.id }))
+          .title,
+        'visible-for-one',
+      );
+      const updated = await f.request(
+        'tools/call',
+        {
+          name: 'updateBulletins',
+          arguments: { id: f.doc.id, title: 'published-change' },
+        },
         await f.token('cms:access cms:read cms:write cms:publish'),
       );
-      const updated = await f.payload.update({
+      assert.ok(!updated.data.error && !updated.data.result.isError);
+      assert.equal(
+        (await f.payload.findByID({ collection: 'bulletins', id: f.doc.id }))
+          .title,
+        'published-change',
+      );
+      const draft = await f.payload.create({
         collection: 'bulletins',
-        id: f.doc.id,
-        data: { title: 'published-change' },
-        req: authorized.req,
-        overrideAccess: false,
+        data: { title: 'draft-only', owner: f.one.id, isPublic: false },
       });
-      assert.equal(updated.title, 'published-change');
+      f.checkedDocuments.length = 0;
+      const bulk = await f.request(
+        'tools/call',
+        {
+          name: 'updateBulletins',
+          arguments: {
+            where: JSON.stringify({ id: { in: [f.doc.id, draft.id] } }),
+            title: 'mixed-bulk-change',
+          },
+        },
+        await f.token('cms:access cms:read cms:write'),
+      );
+      assert.ok(bulk.text.includes('Errors: 1'), bulk.text);
+      assert.deepEqual(
+        new Set(f.checkedDocuments),
+        new Set([f.doc.id, draft.id]),
+      );
+      assert.equal(
+        (await f.payload.findByID({ collection: 'bulletins', id: f.doc.id }))
+          .title,
+        'published-change',
+      );
+      assert.equal(
+        (await f.payload.findByID({ collection: 'bulletins', id: draft.id }))
+          .title,
+        'mixed-bulk-change',
+      );
     },
   );
   await t.test(
     'audit events identify operations and clients without credentials or content',
     async () => {
       const token = await f.token();
+      const unknown = await f.request(
+        'tools/call',
+        {
+          name: 'untrusted-tool-private-sensitive',
+          arguments: { secret: 'private-arguments-never-log' },
+        },
+        token,
+      );
+      assert.ok(unknown.data.error || unknown.data.result?.isError);
+      const failedRpc = auditEvents.find(
+        (e) =>
+          e.requestId === unknown.response.headers.get('x-request-id') &&
+          e.operation === 'tools/call',
+      );
+      assert.equal(failedRpc.target, 'unknown_tool');
+      assert.equal(failedRpc.outcome, 'failed');
+      assert.ok(
+        auditEvents.some(
+          (e) =>
+            e.operation === 'tools/call' &&
+            e.target === 'collection:bulletins' &&
+            e.outcome === 'denied',
+        ),
+      );
+      assert.ok(
+        auditEvents.some(
+          (e) =>
+            e.operation === 'tools/call' && e.outcome === 'partial_failure',
+        ),
+      );
+      assert.ok(!JSON.stringify(auditEvents).includes('private-arguments'));
+      assert.ok(
+        !JSON.stringify(auditEvents).includes('untrusted-tool-private'),
+      );
       await f.request('tools/list', {}, token);
       const requests = auditEvents.filter(
         (event) => event.operation === 'request',

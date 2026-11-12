@@ -33,6 +33,7 @@ import type {
 
 import { createNativeSessions, SESSION_COLLECTION } from './native-session.js';
 import { createLogin } from './login.js';
+import { inspectRpc, rpcMethod } from './rpc-audit.js';
 
 export type * from './types.js';
 
@@ -52,6 +53,9 @@ type Principal = {
   readonly requestId: string;
   readonly identity: VerifiedIdentity;
   readonly user: TypedUser;
+  readonly rpc: {
+    outcome?: 'success' | 'failed' | 'denied' | 'partial_failure';
+  };
 };
 const operations: readonly MCPOperation[] = ['find', 'create', 'update'];
 const camelCase = (slug: string) =>
@@ -207,7 +211,12 @@ export function createXignetPayload<TUser extends TypedUser>(
       }
       // Payload's default is an authenticated user when no collection access
       // function is configured. Preserve that default for all channels.
-      return existing ? existing(args) : Boolean(args.req.user);
+      const allowed = existing ? await existing(args) : Boolean(args.req.user);
+      if (args.req.payloadAPI === 'MCP' && allowed === false) {
+        const p = principal(args.req);
+        if (p) p.rpc.outcome = 'denied';
+      }
+      return allowed;
     };
 
   const guardMutation =
@@ -235,6 +244,7 @@ export function createXignetPayload<TUser extends TypedUser>(
         identity: p.identity,
       });
       if (required === false) {
+        p.rpc.outcome = 'denied';
         audit(args.req, operation, 'mutation', 'denied_by_policy');
         throw new APIError('MCP mutation refused', 403);
       }
@@ -242,6 +252,7 @@ export function createXignetPayload<TUser extends TypedUser>(
       if (
         !hasAllScopes(p.identity, [...options.admissionScopes, ...required])
       ) {
+        p.rpc.outcome = 'denied';
         audit(args.req, operation, 'mutation', 'insufficient_scope');
         throw new APIError('MCP scope insufficient', 403);
       }
@@ -306,6 +317,7 @@ export function createXignetPayload<TUser extends TypedUser>(
       requestId,
       identity: verified.identity,
       user: req.user,
+      rpc: {},
     });
     principals.set(marker, p);
     req.context = { ...req.context, [contextKey]: marker };
@@ -314,6 +326,38 @@ export function createXignetPayload<TUser extends TypedUser>(
 
   const sessions = createNativeSessions(options);
   const login = createLogin(options, sessions);
+  const toolTargets = new Map<string, string>();
+  const toolScopes = new Map<string, readonly string[]>();
+  for (const [kind, policies] of [
+    ['collection', collections],
+    ['global', globals],
+  ] as const)
+    for (const [slug, policy] of Object.entries(policies))
+      for (const op of operations)
+        if (policy[op]) {
+          const name = `${op}${slug.charAt(0).toUpperCase()}${camelCase(slug).slice(1)}`;
+          toolScopes.set(name, policy[op]!.scopes);
+          toolTargets.set(
+            `${op}${slug.charAt(0).toUpperCase()}${camelCase(slug).slice(1)}`,
+            `${kind}:${slug}`,
+          );
+        }
+  const toolResponse = (
+    response: { content: Array<{ text: string; type: string }> },
+    doc: Record<string, unknown>,
+    req: PayloadRequest,
+  ) => {
+    const p = principal(req);
+    if (p) {
+      const hasErrors = Array.isArray(doc.errors) && doc.errors.length > 0;
+      const hasSuccesses = Array.isArray(doc.docs) && doc.docs.length > 0;
+      if (hasErrors && hasSuccesses) p.rpc.outcome = 'partial_failure';
+      else if (p.rpc.outcome !== 'denied')
+        p.rpc.outcome =
+          hasErrors || !Object.keys(doc).length ? 'failed' : 'success';
+    }
+    return response;
+  };
   return {
     ...login,
     loginEnabled: options.login?.enabled === true,
@@ -358,6 +402,7 @@ export function createXignetPayload<TUser extends TypedUser>(
           Object.entries(collections).map(([slug, p]) => [
             slug,
             {
+              overrideResponse: toolResponse,
               enabled: {
                 find: Boolean(p.find),
                 create: Boolean(p.create),
@@ -370,7 +415,10 @@ export function createXignetPayload<TUser extends TypedUser>(
         globals: Object.fromEntries(
           Object.entries(globals).map(([slug, p]) => [
             slug,
-            { enabled: { find: Boolean(p.find), update: Boolean(p.update) } },
+            {
+              enabled: { find: Boolean(p.find), update: Boolean(p.update) },
+              overrideResponse: toolResponse,
+            },
           ]),
         ),
         overrideAuth: async (req) => {
@@ -428,7 +476,13 @@ export function createXignetPayload<TUser extends TypedUser>(
                   args.req,
                   args.operation,
                   `collection:${c.slug}`,
-                  'success',
+                  args.result &&
+                    typeof args.result === 'object' &&
+                    'errors' in args.result &&
+                    Array.isArray(args.result.errors) &&
+                    args.result.errors.length
+                    ? 'partial_failure'
+                    : 'success',
                 );
                 return args.result;
               },
@@ -478,8 +532,51 @@ export function createXignetPayload<TUser extends TypedUser>(
                 const requestId = randomUUID();
                 try {
                   req.payloadAPI = 'MCP';
-                  await authenticate(req, requestId);
+                  const p = await authenticate(req, requestId);
+                  const rpc = req.clone
+                    ? await inspectRpc(req.clone())
+                    : undefined;
+                  const method = rpcMethod(rpc?.method);
+                  const name =
+                    rpc?.params &&
+                    typeof rpc.params === 'object' &&
+                    'name' in rpc.params
+                      ? rpc.params.name
+                      : undefined;
+                  const target =
+                    typeof name === 'string'
+                      ? toolTargets.get(name)
+                      : undefined;
+                  if (
+                    typeof name === 'string' &&
+                    toolScopes.has(name) &&
+                    !hasAllScopes(p.identity, toolScopes.get(name)!)
+                  )
+                    p.rpc.outcome = 'denied';
                   const response = await endpoint.handler(req);
+                  const reply = await inspectRpc(response.clone());
+                  const isError =
+                    reply?.error ||
+                    (reply?.result &&
+                      typeof reply.result === 'object' &&
+                      'isError' in reply.result &&
+                      reply.result.isError === true);
+                  let outcome = 'unobserved';
+                  if (rpc) {
+                    if (p.rpc.outcome === 'denied') outcome = 'denied';
+                    else if (isError || response.status >= 400)
+                      outcome = 'failed';
+                    else if (p.rpc.outcome) outcome = p.rpc.outcome;
+                    else if (reply?.result && method !== 'tools/call')
+                      outcome = 'success';
+                  }
+                  audit(
+                    req,
+                    method,
+                    target ??
+                      (method === 'tools/call' ? 'unknown_tool' : 'protocol'),
+                    outcome,
+                  );
                   audit(
                     req,
                     'request',

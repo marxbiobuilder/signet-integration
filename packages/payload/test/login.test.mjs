@@ -18,7 +18,7 @@ import { sqliteAdapter } from '@payloadcms/db-sqlite';
 import { createXignetPayload } from '../dist/v3.js';
 import { createXignetRouteHandlers } from '../dist/next.js';
 
-async function fixture(t) {
+async function fixture(t, transactions = false) {
   const folder = await mkdtemp(join(tmpdir(), 'xignet-sso-'));
   const keys = await generateKeyPair('RS256');
   const jwk = {
@@ -124,6 +124,7 @@ async function fixture(t) {
     db: sqliteAdapter({
       client: { url: `file:${folder}/test.sqlite` },
       push: true,
+      ...(transactions ? { transactionOptions: { behavior: 'deferred' } } : {}),
     }),
     collections: [
       {
@@ -131,18 +132,30 @@ async function fixture(t) {
         auth: { useSessions: true, tokenExpiration: 3600 },
         hooks: {
           beforeLogin: [
-            ({ user }) => {
+            ({ user, req }) => {
               hooks.before++;
+              hooks.beforeContext = {
+                header: req.headers.get('x-login-context'),
+                pathname: req.pathname,
+              };
               return user;
             },
           ],
           afterLogin: [
-            ({ user }) => {
+            ({ user, req }) => {
               hooks.after++;
+              hooks.afterContext = {
+                header: req.headers.get('x-login-context'),
+                pathname: req.pathname,
+              };
               if (hooks.failAfter)
                 throw new Error(
                   'private-sensitive-hook-message\nprivate-sensitive-continuation',
                 );
+              return { ...user, hookEnrichment: 'from-first-hook' };
+            },
+            ({ user }) => {
+              hooks.chainedValue = user.hookEnrichment;
               return user;
             },
           ],
@@ -155,7 +168,17 @@ async function fixture(t) {
     ],
     plugins: [integration.plugin()],
   });
-  const payload = await getPayload({ config });
+  // Drizzle's development schema cache is process-wide rather than per DB.
+  const previousForcePush = process.env.PAYLOAD_FORCE_DRIZZLE_PUSH;
+  process.env.PAYLOAD_FORCE_DRIZZLE_PUSH = 'true';
+  let payload;
+  try {
+    payload = await getPayload({ config, key: folder });
+  } finally {
+    if (previousForcePush === undefined)
+      delete process.env.PAYLOAD_FORCE_DRIZZLE_PUSH;
+    else process.env.PAYLOAD_FORCE_DRIZZLE_PUSH = previousForcePush;
+  }
   t.after(async () => {
     await payload.destroy();
     await new Promise((resolve) => server.close(resolve));
@@ -210,7 +233,12 @@ async function fixture(t) {
     },
     async complete(begin) {
       const response = await handlers.callback(
-        new Request(begin.url, { headers: { cookie: begin.cookie } }),
+        new Request(begin.url, {
+          headers: {
+            cookie: begin.cookie,
+            'x-login-context': 'callback-context',
+          },
+        }),
       );
       const cookie = response.headers
         .getSetCookie()
@@ -265,6 +293,12 @@ test('SSO creates native Payload sessions with bounded refresh and revocation', 
       assert.ok(jwt.exp - jwt.iat <= 120);
       assert.equal(f.hooks.before, 1);
       assert.equal(f.hooks.after, 1);
+      assert.deepEqual(f.hooks.beforeContext, {
+        header: 'callback-context',
+        pathname: '/auth/xignet/callback',
+      });
+      assert.deepEqual(f.hooks.afterContext, f.hooks.beforeContext);
+      assert.equal(f.hooks.chainedValue, 'from-first-hook');
       assert.equal((await f.complete(begin)).response.status, 401);
     },
   );
@@ -404,6 +438,19 @@ test('SSO creates native Payload sessions with bounded refresh and revocation', 
   await t.test(
     'explicit user revocation removes SSO sessions but keeps local login usable',
     async () => {
+      const local = await f.payload.login({
+        collection: 'users',
+        data: {
+          email: 'one@example.test',
+          password: 'fixture-only-password-long',
+        },
+      });
+      const localCookie = `payload-token=${local.token}`;
+      assert.equal(
+        (await f.payload.auth({ headers: f.requestFor(localCookie).headers }))
+          .user.id,
+        f.user.id,
+      );
       const { cookie } = await f.signedIn();
       await f.integration.revokeUserSessions({
         payload: f.payload,
@@ -413,13 +460,24 @@ test('SSO creates native Payload sessions with bounded refresh and revocation', 
         (await f.payload.auth({ headers: f.requestFor(cookie).headers })).user,
         null,
       );
-      const local = await f.payload.login({
-        collection: 'users',
-        data: {
-          email: 'one@example.test',
-          password: 'fixture-only-password-long',
-        },
+      assert.equal(
+        (await f.payload.auth({ headers: f.requestFor(localCookie).headers }))
+          .user.id,
+        f.user.id,
+      );
+      const refreshed = await refreshOperation({
+        collection: f.payload.collections.users,
+        req: await f.authenticatedReq(localCookie),
       });
+      assert.equal(
+        decodeJwt(refreshed.refreshedToken).sid,
+        decodeJwt(local.token).sid,
+      );
+      assert.equal(
+        decodeJwt(refreshed.refreshedToken).exp -
+          decodeJwt(refreshed.refreshedToken).iat,
+        3600,
+      );
       assert.equal(decodeJwt(local.token).__xignet_sso, undefined);
       assert.equal(
         decodeJwt(local.token).exp - decodeJwt(local.token).iat,
@@ -473,4 +531,51 @@ test('SSO creates native Payload sessions with bounded refresh and revocation', 
       assert.deepEqual(afterUser.sessions, beforeUser.sessions);
     },
   );
+});
+
+test('transaction failures are observable and never issue a login cookie', async (t) => {
+  const f = await fixture(t, true);
+  const events = [];
+  t.mock.method(f.payload.logger, 'error', (event) => events.push(event));
+  const countSessions = () =>
+    f.payload.count({ collection: 'xignet-sessions', overrideAccess: true });
+  const before = await countSessions();
+  // Real SQLite transactions: an afterLogin failure must undo both tables.
+  f.hooks.failAfter = true;
+  const failure = await f.complete(await f.begin());
+  assert.equal(failure.response.status, 500);
+  assert.equal(failure.cookie, undefined);
+  assert.equal((await countSessions()).totalDocs, before.totalDocs);
+  f.hooks.failAfter = false;
+  const rollback = f.payload.db.rollbackTransaction.bind(f.payload.db);
+  const commitMock = t.mock.method(
+    f.payload.db,
+    'commitTransaction',
+    async () => {
+      throw new Error('private-commit-message');
+    },
+  );
+  const commitFailure = await f.complete(await f.begin());
+  commitMock.mock.restore();
+  assert.equal(commitFailure.response.status, 500);
+  assert.equal(commitFailure.cookie, undefined);
+  assert.equal(commitFailure.response.headers.has('location'), false);
+  assert.equal((await countSessions()).totalDocs, before.totalDocs);
+  f.hooks.failAfter = true;
+  const rollbackMock = t.mock.method(
+    f.payload.db,
+    'rollbackTransaction',
+    async (id) => {
+      await rollback(id);
+      throw new Error('private-rollback-message');
+    },
+  );
+  const rollbackFailure = await f.complete(await f.begin());
+  rollbackMock.mock.restore();
+  assert.equal(rollbackFailure.response.status, 503);
+  assert.equal(rollbackFailure.cookie, undefined);
+  assert.ok(
+    events.some((event) => event.event === 'xignet_login_cleanup_failed'),
+  );
+  assert.ok(!JSON.stringify(events).includes('private-'));
 });

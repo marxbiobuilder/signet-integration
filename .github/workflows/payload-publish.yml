@@ -25,15 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 9.1.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -89,13 +89,19 @@ jobs:
       - name: Build
         run: pnpm --filter @xignet/payload... build
 
+      - name: Pack with resolved workspace dependencies
+        working-directory: packages/payload
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+
       - name: Publish
         working-directory: packages/payload
         env:
           DIST_TAG: ${{ steps.dist-tag.outputs.tag }}
         run: |
+          version="$(node -p "require('./package.json').version")"
+          archive="$RUNNER_TEMP/xignet-payload-$version.tgz"
           if [ -n "$DIST_TAG" ]; then
-            npm publish --tag "$DIST_TAG"
+            npm publish "$archive" --tag "$DIST_TAG"
           else
-            npm publish
+            npm publish "$archive"
           fi
