@@ -81,13 +81,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm --filter @xignet/nest lint
+        run: pnpm --filter @xignet/core build && pnpm --filter @xignet/nest lint
 
       - name: Test
         run: pnpm --filter @xignet/nest test
 
       - name: Build
-        run: pnpm --filter @xignet/nest build
+        run: pnpm --filter @xignet/nest... build
 
       - name: Publish
         working-directory: packages/nest

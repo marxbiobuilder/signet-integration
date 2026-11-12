@@ -41,6 +41,10 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Check core package contents
+        working-directory: packages/core
+        run: npm pack --dry-run
+
       - name: Show what a publish of @xignet/nest would ship
         working-directory: packages/nest
         run: npm pack --dry-run

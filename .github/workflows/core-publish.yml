@@ -1,0 +1,101 @@
+# Publishes @xignet/core (packages/core) to npm when a `core-vX.Y.Z` or
+# `core-vX.Y.Z-<pre>` tag is pushed. Authenticates with npm trusted publishing
+# (OIDC): no token, no OTP. The trusted publisher on npmjs.com must name this
+# repository and this file (`core-publish.yml`).
+#
+# npm 11 refuses to publish a prerelease without `--tag`, so a prerelease
+# (`vX.Y.Z-beta.0`) gets `--tag` set to its first prerelease identifier
+# (`beta`). A stable version gets no `--tag`: npm then applies `latest` itself
+# and keeps its check that refuses to move `latest` below a higher version
+# already published (a `0.2.1` backport after `0.3.0`). An explicit `--tag`
+# turns both of npm's checks off.
+name: Publish @xignet/core
+
+on:
+  push:
+    tags:
+      - 'core-v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Refuse a tag that does not match packages/core/package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          name="$(node -p "require('./packages/core/package.json').name")"
+          version="$(node -p "require('./packages/core/package.json').version")"
+          if [ "$name" != "@xignet/core" ]; then
+            echo "packages/core/package.json is $name, not @xignet/core" >&2
+            exit 1
+          fi
+          if [ "$TAG" != "core-v$version" ]; then
+            echo "tag $TAG does not match packages/core/package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Pick the npm dist-tag
+        id: dist-tag
+        run: |
+          version="$(node -p "require('./packages/core/package.json').version")"
+          version="${version%%+*}"
+          tag=""
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            tag="${prerelease%%.*}"
+            # A leading letter rules out numeric identifiers (`0`), which npm
+            # rejects as semver ranges; npm still rejects range-like ones such
+            # as `x` or `v1`, but only at publish time. `latest` is refused
+            # because `--tag latest` would put a prerelease on `latest`.
+            if [[ ! "$tag" =~ ^[A-Za-z][A-Za-z0-9-]*$ || "$tag" == latest ]]; then
+              echo "prerelease $version has no usable dist-tag: identifier '$tag' must start with a letter and must not be 'latest'" >&2
+              exit 1
+            fi
+            echo "publishing $version under dist-tag $tag"
+          else
+            echo "publishing $version under npm's default dist-tag (latest)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter @xignet/core lint
+
+      - name: Test
+        run: pnpm --filter @xignet/core test
+
+      - name: Build
+        run: pnpm --filter @xignet/core build
+
+      - name: Publish
+        working-directory: packages/core
+        env:
+          DIST_TAG: ${{ steps.dist-tag.outputs.tag }}
+        run: |
+          if [ -n "$DIST_TAG" ]; then
+            npm publish --tag "$DIST_TAG"
+          else
+            npm publish
+          fi

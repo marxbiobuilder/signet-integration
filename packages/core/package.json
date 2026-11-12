@@ -1,0 +1,62 @@
+{
+  "name": "@xignet/core",
+  "version": "0.1.0-beta.0",
+  "description": "Framework-independent Xignet JWT, OAuth and OIDC integration.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marxbiobuilder/signet-integration.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./oauth": {
+      "types": "./dist/oauth.d.ts",
+      "default": "./dist/oauth.js"
+    },
+    "./oidc": {
+      "types": "./dist/oidc.d.ts",
+      "default": "./dist/oidc.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "prettier --check 'src/**/*.ts' 'test/**/*.mjs'",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "test:cov": "pnpm build && node --experimental-test-coverage --test test/*.test.mjs",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "jose": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.12.0",
+    "typescript": "^5.7.3",
+    "prettier": "^3.4.2"
+  },
+  "typesVersions": {
+    "*": {
+      "oauth": [
+        "dist/oauth.d.ts"
+      ],
+      "oidc": [
+        "dist/oidc.d.ts"
+      ]
+    }
+  }
+}

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Share JWT, scope vocabulary and pure OIDC primitives with `@xignet/core` while retaining existing entry points and state-cookie compatibility.
+
 All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
