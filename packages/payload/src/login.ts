@@ -121,6 +121,7 @@ export function createLogin<TUser extends TypedUser>(
       req.payloadAPI = 'REST';
       let ownTransaction = false;
       let ownedTransactionID: string | number | undefined;
+      let transactionCompleted = false;
       let createdSession: { sid: string; userId: string | number } | undefined;
       try {
         const values = (request.headers.get('cookie') ?? '')
@@ -258,11 +259,38 @@ export function createLogin<TUser extends TypedUser>(
           if (req.transactionID !== ownedTransactionID)
             throw new LoginTransactionInterrupted();
           await commitTransaction(req);
+          transactionCompleted = true;
         }
+        // Some adapters fulfill commit even if the underlying transaction
+        // rolled back. Fresh reads outside req's transaction must confirm
+        // both records before the browser receives its authentication cookie.
+        const [persistedMetadata, persistedUser] = await Promise.all([
+          payload.db.findOne({
+            collection: SESSION_COLLECTION,
+            where: {
+              and: [
+                { sid: { equals: sid } },
+                { resource: { equals: options.resource } },
+                { user: { equals: user.id } },
+              ],
+            },
+          }),
+          payload.db.findOne({
+            collection: options.userCollection,
+            where: { id: { equals: user.id } },
+          }),
+        ]);
+        if (
+          !persistedMetadata ||
+          !(persistedUser as TypedUser | null)?.sessions?.some(
+            (session: { id: string }) => session.id === sid,
+          )
+        )
+          throw new APIError('SSO session persistence failed', 503);
         return response;
       } catch (error) {
         try {
-          if (ownTransaction) {
+          if (ownTransaction && !transactionCompleted) {
             // Payload's killTransaction swallows adapter rollback errors.
             // This callback owns the transaction and must observe failures.
             try {

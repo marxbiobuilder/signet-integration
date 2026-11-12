@@ -618,3 +618,44 @@ test('metadata failure cannot conceal a nested rollback failure', async (t) => {
     before.totalDocs,
   );
 });
+
+test('a fulfilled Drizzle commit cannot issue a cookie after underlying rollback', async (t) => {
+  const f = await fixture(t, true);
+  const before = await f.payload.count({
+    collection: 'xignet-sessions',
+    overrideAccess: true,
+  });
+  const transaction = f.payload.db.drizzle.transaction.bind(
+    f.payload.db.drizzle,
+  );
+  let underlyingRejected = false;
+  const mock = t.mock.method(
+    f.payload.db.drizzle,
+    'transaction',
+    (operation, options) =>
+      transaction(async (tx) => {
+        await operation(tx);
+        underlyingRejected = true;
+        throw new Error('private-underlying-commit-failure');
+      }, options),
+  );
+  const result = await f.complete(await f.begin());
+  mock.mock.restore();
+  assert.equal(underlyingRejected, true);
+  assert.equal(result.response.status, 503);
+  assert.equal(result.cookie, undefined);
+  assert.equal(
+    (
+      await f.payload.count({
+        collection: 'xignet-sessions',
+        overrideAccess: true,
+      })
+    ).totalDocs,
+    before.totalDocs,
+  );
+  const user = await f.payload.db.findOne({
+    collection: 'users',
+    where: { id: { equals: f.user.id } },
+  });
+  assert.equal(user.sessions?.length ?? 0, 0);
+});
