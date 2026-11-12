@@ -13,10 +13,14 @@ import {
   getPayload,
   logoutOperation,
   refreshOperation,
+  getFieldsToSign,
+  jwtSign,
 } from 'payload';
+import { addSessionToUser } from 'payload/shared';
 import { sqliteAdapter } from '@payloadcms/db-sqlite';
 import { createXignetPayload } from '../dist/v3.js';
 import { createXignetRouteHandlers } from '../dist/next.js';
+import { xignetPlugin, XIGNET_PROVIDER } from '../dist/plugin.js';
 
 async function fixture(
   t,
@@ -26,6 +30,8 @@ async function fixture(
     cmsOrigin = 'https://cms.example.test',
     clientId = 'website-web',
     admissionScope = 'cms:access',
+    sessionAuthentication = 'mixed',
+    managedUsers = false,
   } = {},
 ) {
   const folder = await mkdtemp(join(tmpdir(), 'xignet-sso-'));
@@ -93,13 +99,29 @@ async function fixture(
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   issuer = `http://127.0.0.1:${server.address().port}`;
-  const integration = createXignetPayload({
+  const createIntegration = managedUsers
+    ? (settings) => {
+        const { issuer, jwksUri, resolveUser, sessionAuthentication, ...rest } =
+          settings;
+        return xignetPlugin({
+          ...rest,
+          provider: { issuer, jwksUri },
+          users: {
+            canManageBindings: (req) => req.user?.role === 'admin',
+            allowUser: (user) => ['admin', 'editor'].includes(user.role),
+            revokeOnFields: ['role'],
+          },
+        });
+      }
+    : createXignetPayload;
+  const integration = createIntegration({
     issuer,
     jwksUri: `${issuer}/jwks`,
     resource: `${cmsOrigin}/api/mcp`,
     allowInsecureLoopback: true,
     admissionScopes: [admissionScope],
     userCollection,
+    sessionAuthentication,
     resolveUser: async ({ identity, payload }) => {
       const { docs } = await payload.find({
         collection: userCollection,
@@ -171,13 +193,15 @@ async function fixture(
             },
           ],
         },
-        fields: [
-          { name: 'subject', type: 'text' },
-          { name: 'enabled', type: 'checkbox' },
-        ],
+        fields: managedUsers
+          ? [{ name: 'role', type: 'text' }]
+          : [
+              { name: 'subject', type: 'text' },
+              { name: 'enabled', type: 'checkbox' },
+            ],
       },
     ],
-    plugins: [integration.plugin()],
+    plugins: [managedUsers ? integration : integration.plugin()],
   });
   // Drizzle's development schema cache is process-wide rather than per DB.
   const previousForcePush = process.env.PAYLOAD_FORCE_DRIZZLE_PUSH;
@@ -199,9 +223,12 @@ async function fixture(
     collection: userCollection,
     data: {
       email: 'one@example.test',
-      password: 'fixture-only-password-long',
-      subject: 'one',
-      enabled: true,
+      ...(!managedUsers && sessionAuthentication === 'mixed'
+        ? { password: 'fixture-only-password-long' }
+        : {}),
+      ...(managedUsers
+        ? { role: 'admin', xignetSubject: 'one' }
+        : { subject: 'one', enabled: true }),
     },
   });
   const handlers = createXignetRouteHandlers(integration, {
@@ -737,5 +764,319 @@ test('another CMS reuses SSO with its own auth collection and trust configuratio
     (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
       .user,
     null,
+  );
+});
+
+test('Xignet-only users have no password and use the supported custom session strategy', async (t) => {
+  const f = await fixture(t, false, { sessionAuthentication: 'xignet-only' });
+  const collection = f.payload.collections.users;
+  assert.deepEqual(collection.config.auth.disableLocalStrategy, {
+    enableFields: true,
+  });
+  const stored = await f.payload.db.findOne({
+    collection: 'users',
+    where: { id: { equals: f.user.id } },
+  });
+  assert.ok(!stored.hash && !stored.salt);
+  await assert.rejects(
+    f.payload.login({
+      collection: 'users',
+      data: {
+        email: f.user.email,
+        password: 'not-a-credential',
+      },
+    }),
+  );
+  await assert.rejects(
+    f.payload.update({
+      collection: 'users',
+      id: f.user.id,
+      data: { password: 'cannot-enable-local-login' },
+    }),
+  );
+
+  const req = await createLocalReq({}, f.payload);
+  const { sid } = await addSessionToUser({
+    collectionConfig: collection.config,
+    payload: f.payload,
+    req,
+    user: { ...stored, collection: 'users' },
+  });
+  const unmarked = await jwtSign({
+    fieldsToSign: getFieldsToSign({
+      collectionConfig: collection.config,
+      user: { ...stored, collection: 'users' },
+      email: stored.email,
+      sid,
+    }),
+    secret: f.payload.secret,
+    tokenExpiration: 120,
+  });
+  assert.equal(
+    (
+      await f.payload.auth({
+        headers: f.requestFor(`payload-token=${unmarked.token}`).headers,
+      })
+    ).user,
+    null,
+  );
+
+  const signed = await f.signedIn();
+  const auth = await f.payload.auth({
+    headers: f.requestFor(signed.cookie).headers,
+  });
+  assert.equal(auth.user._strategy, 'xignet-session');
+  const refreshed = await refreshOperation({
+    collection,
+    req: await f.authenticatedReq(signed.cookie),
+  });
+  assert.equal(decodeJwt(refreshed.refreshedToken).__xignet_sso, true);
+  const refreshedCookie = `payload-token=${refreshed.refreshedToken}`;
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(refreshedCookie).headers }))
+      .user.id,
+    f.user.id,
+  );
+  await logoutOperation({
+    collection,
+    req: await f.authenticatedReq(refreshedCookie, '/api/users/logout'),
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(refreshedCookie).headers }))
+      .user,
+    null,
+  );
+});
+
+test('standard plugin uses the shared provider without per-project issuer settings', async () => {
+  const plugin = xignetPlugin({
+    resource: 'https://cms.example.test/api/mcp',
+    admissionScopes: ['cms:access'],
+    userCollection: 'users',
+    mcp: { enabled: true, collections: {} },
+    users: { canManageBindings: () => false, allowUser: () => true },
+  });
+  assert.equal(typeof plugin, 'function');
+  assert.deepEqual((await plugin.metadata().json()).authorization_servers, [
+    XIGNET_PROVIDER.issuer,
+  ]);
+});
+
+test('Xignet-only configuration refuses alternative auth entry points', async () => {
+  const plugin = xignetPlugin({
+    resource: 'https://cms.example.test/api/mcp',
+    admissionScopes: ['cms:access'],
+    userCollection: 'users',
+    mcp: { enabled: false, collections: {} },
+    users: { canManageBindings: () => false, allowUser: () => true },
+  });
+  for (const auth of [
+    { useAPIKey: true },
+    { useSessions: false },
+    {
+      strategies: [
+        { name: 'bypass', authenticate: async () => ({ user: null }) },
+      ],
+    },
+  ]) {
+    await assert.rejects(
+      plugin({ collections: [{ slug: 'users', auth, fields: [] }] }),
+    );
+  }
+  await assert.rejects(
+    plugin({
+      admin: { autoLogin: { email: 'fixture@example.test' } },
+      collections: [{ slug: 'users', auth: true, fields: [] }],
+    }),
+    /autoLogin/,
+  );
+});
+
+test('standard plugin manages passwordless accounts from admin-supplied subjects', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  assert.equal(f.user.xignetIssuer, f.issuer);
+  assert.equal(f.user.xignetSubject, 'one');
+  const admin = await f.signedIn();
+  const req = await f.authenticatedReq(admin.cookie);
+  req.payloadAPI = 'REST';
+  let editor;
+
+  await t.test(
+    'an authenticated admin creates a passwordless editor with only sub',
+    async () => {
+      editor = await f.payload.create({
+        collection: 'users',
+        req,
+        overrideAccess: false,
+        data: {
+          email: 'editor@example.test',
+          role: 'editor',
+          xignetSubject: 'two',
+        },
+      });
+      assert.equal(editor.xignetIssuer, f.issuer);
+      assert.equal(editor.xignetEnabled, true);
+      const stored = await f.payload.db.findOne({
+        collection: 'users',
+        where: { id: { equals: editor.id } },
+      });
+      assert.ok(!stored.hash && !stored.salt);
+      await assert.rejects(
+        f.payload.create({
+          collection: 'users',
+          req,
+          data: { email: 'missing@example.test', role: 'editor' },
+        }),
+      );
+      await assert.rejects(
+        f.payload.create({
+          collection: 'users',
+          req,
+          data: {
+            email: 'foreign@example.test',
+            role: 'editor',
+            xignetSubject: 'three',
+            xignetIssuer: 'https://foreign.example.test',
+          },
+        }),
+      );
+      await assert.rejects(
+        f.payload.db.create({
+          collection: 'users',
+          data: {
+            email: 'duplicate@example.test',
+            role: 'editor',
+            xignetIssuer: f.issuer,
+            xignetSubject: 'two',
+            xignetEnabled: true,
+          },
+        }),
+      );
+    },
+  );
+
+  await t.test(
+    'native password operations cannot enable password login',
+    async () => {
+      const forbidden = (error) => error.status === 403;
+      await assert.rejects(
+        f.payload.login({
+          collection: 'users',
+          data: {
+            email: editor.email,
+            password: 'unused-password',
+          },
+        }),
+        forbidden,
+      );
+      await assert.rejects(
+        f.payload.forgotPassword({
+          collection: 'users',
+          data: {
+            email: editor.email,
+          },
+        }),
+        forbidden,
+      );
+      await f.payload.db.updateOne({
+        collection: 'users',
+        id: editor.id,
+        data: {
+          resetPasswordToken: 'fixture-reset-token',
+          resetPasswordExpiration: new Date(Date.now() + 60000).toISOString(),
+        },
+      });
+      await assert.rejects(
+        f.payload.resetPassword({
+          collection: 'users',
+          data: {
+            token: 'fixture-reset-token',
+            password: 'cannot-install-password',
+          },
+        }),
+        forbidden,
+      );
+      const stored = await f.payload.db.findOne({
+        collection: 'users',
+        where: { id: { equals: editor.id } },
+      });
+      assert.ok(!stored.hash && !stored.salt);
+    },
+  );
+
+  await t.test(
+    'editor signs in with Xignet but cannot change bindings',
+    async () => {
+      const signed = await f.complete(await f.begin('two'));
+      assert.equal(signed.response.status, 303);
+      const editorReq = await f.authenticatedReq(signed.cookie);
+      editorReq.payloadAPI = 'REST';
+      await f.payload.update({
+        collection: 'users',
+        id: editor.id,
+        req: editorReq,
+        overrideAccess: false,
+        data: { xignetSubject: 'other' },
+      });
+      const unchanged = await f.payload.db.findOne({
+        collection: 'users',
+        where: { id: { equals: editor.id } },
+      });
+      assert.equal(unchanged.xignetSubject, 'two');
+      assert.equal(unchanged.xignetIssuer, f.issuer);
+      await f.payload.update({
+        collection: 'users',
+        id: editor.id,
+        req,
+        data: { role: 'admin' },
+      });
+      assert.equal(
+        (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+          .user,
+        null,
+      );
+    },
+  );
+
+  await t.test(
+    'historical issuer stays stable until an explicit subject rebind',
+    async () => {
+      const previous = 'https://previous.example.test';
+      await f.payload.db.updateOne({
+        collection: 'users',
+        id: editor.id,
+        data: { xignetIssuer: previous },
+      });
+      const preserved = await f.payload.update({
+        collection: 'users',
+        id: editor.id,
+        req,
+        data: { role: 'editor' },
+      });
+      assert.equal(preserved.xignetIssuer, previous);
+      await assert.rejects(
+        f.payload.update({
+          collection: 'users',
+          id: editor.id,
+          req,
+          data: { xignetIssuer: f.issuer },
+        }),
+      );
+      const rebound = await f.payload.update({
+        collection: 'users',
+        id: editor.id,
+        req,
+        data: { xignetSubject: 'new-two', xignetIssuer: previous },
+      });
+      assert.equal(rebound.xignetIssuer, f.issuer);
+      assert.equal(
+        (await f.complete(await f.begin('two'))).response.status,
+        403,
+      );
+      assert.equal(
+        (await f.complete(await f.begin('new-two'))).response.status,
+        303,
+      );
+    },
   );
 });

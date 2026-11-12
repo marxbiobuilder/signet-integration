@@ -53,6 +53,8 @@ export interface XignetPayloadOptions<
   readonly admissionScopes: readonly string[];
   readonly userCollection: CollectionSlug;
   readonly resolveUser: ResolveUser<TUser>;
+  /** xignet-only uses a custom session strategy and disables password/API-key auth. */
+  readonly sessionAuthentication?: 'mixed' | 'xignet-only';
   readonly login?: {
     readonly enabled: boolean;
     readonly clientId: string;

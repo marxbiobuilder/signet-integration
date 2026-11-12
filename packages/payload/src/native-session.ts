@@ -9,6 +9,7 @@ import {
   type CollectionAfterReadHook,
   type CollectionConfig,
   type CollectionRefreshHook,
+  type AuthStrategy,
   type Payload,
   type PayloadRequest,
   type TypedUser,
@@ -38,25 +39,28 @@ export type SessionRecord = {
 
 // Match Payload 3.93's credential precedence and CSRF rules. extractJWT is
 // not a public export, so the pinned adapter tests native browser auth.
-function selectedToken(req: PayloadRequest): string | undefined {
+function selectedToken(
+  req: PayloadRequest,
+  headers = req.headers,
+): string | undefined {
   for (const method of req.payload.config.auth.jwtOrder) {
     if (method === 'Bearer' || method === 'JWT') {
-      const header = req.headers.get('authorization');
+      const header = headers.get('authorization');
       if (header?.startsWith(`${method} `))
         return header.slice(method.length + 1);
     } else {
-      const token = parseCookies(req.headers).get(
+      const token = parseCookies(headers).get(
         `${req.payload.config.cookiePrefix}-token`,
       );
       if (!token) continue;
-      const origin = req.headers.get('origin');
+      const origin = headers.get('origin');
       const csrf = req.payload.config.csrf;
       if (
         origin
           ? csrf.length === 0 || csrf.includes(origin)
           : csrf.length === 0 ||
             ['same-origin', 'same-site', 'none'].includes(
-              req.headers.get('sec-fetch-site') ?? '',
+              headers.get('sec-fetch-site') ?? '',
             )
       )
         return token;
@@ -65,8 +69,11 @@ function selectedToken(req: PayloadRequest): string | undefined {
   return undefined;
 }
 
-async function reference(req: PayloadRequest): Promise<JWTPayload | undefined> {
-  const token = selectedToken(req);
+async function reference(
+  req: PayloadRequest,
+  headers = req.headers,
+): Promise<JWTPayload | undefined> {
+  const token = selectedToken(req, headers);
   if (!token) return undefined;
   try {
     const result = await jwtVerify(
@@ -89,6 +96,7 @@ export function createNativeSessions<TUser extends TypedUser>(
 ) {
   const maxAge = options.login?.session.maxAgeSeconds ?? 7200;
   const absoluteMaxAge = options.login?.session.absoluteMaxAgeSeconds ?? 7200;
+  const xignetOnly = options.sessionAuthentication === 'xignet-only';
   if (
     ![maxAge, absoluteMaxAge].every(
       (n) => Number.isInteger(n) && n > 0 && n <= 604800,
@@ -267,13 +275,75 @@ export function createNativeSessions<TUser extends TypedUser>(
     const auth = typeof config.auth === 'object' ? config.auth : {};
     if (
       !config.auth ||
-      auth.disableLocalStrategy ||
+      (auth.disableLocalStrategy && !xignetOnly) ||
       auth.useSessions === false
     ) {
-      if (options.login?.enabled)
+      if (options.login?.enabled || xignetOnly)
         throw new Error('SSO requires native Payload auth with sessions');
       return config;
     }
+    if (xignetOnly && (auth.useAPIKey || auth.strategies?.length))
+      throw new Error(
+        'Xignet-only sessions cannot compose API-key or other authentication strategies',
+      );
+    const strategy: AuthStrategy = {
+      name: 'xignet-session',
+      authenticate: async ({ headers, payload, req: incomingReq }) => {
+        const req =
+          incomingReq ??
+          (await createLocalReq(
+            {
+              req: new Request(options.resource, { headers }),
+            },
+            payload,
+          ));
+        try {
+          const ref = await reference(req, headers);
+          if (
+            !ref ||
+            ref.collection !== options.userCollection ||
+            !['string', 'number'].includes(typeof ref.id) ||
+            typeof ref.sid !== 'string'
+          )
+            return { user: null };
+          const entry = await record(req, ref.sid);
+          if (!entry || !(await allowed(req, entry, ref.id as UserID))) {
+            await revokeSession(req, ref.id as UserID, ref.sid);
+            return { user: null };
+          }
+          const user = (await payload.findByID({
+            collection: options.userCollection,
+            id: ref.id as UserID,
+            req,
+            overrideAccess: true,
+            depth: 0,
+            disableErrors: true,
+          })) as NativeSessionUser | null;
+          if (
+            !user?.sessions?.some(
+              (s) =>
+                s.id === ref.sid &&
+                Date.parse(String(s.expiresAt)) > Date.now(),
+            )
+          )
+            return { user: null };
+          return {
+            user: {
+              ...user,
+              collection: options.userCollection,
+              _sid: ref.sid,
+              _strategy: 'xignet-session',
+            } as TypedUser,
+          };
+        } catch (error) {
+          payload.logger.error({
+            event: 'xignet_session_authentication_failed',
+            category: error instanceof Error ? error.name : 'unknown',
+          });
+          throw new APIError('Xignet session authentication unavailable', 503);
+        }
+      },
+    };
     const previousRefresh = config.hooks?.refresh ?? [];
     const refresh: CollectionRefreshHook = async (args) => {
       const ref = await reference(args.args.req);
@@ -347,6 +417,13 @@ export function createNativeSessions<TUser extends TypedUser>(
       ...config,
       auth: {
         ...auth,
+        ...(xignetOnly
+          ? {
+              disableLocalStrategy: { enableFields: true },
+              useAPIKey: false,
+              strategies: [strategy],
+            }
+          : {}),
         useSessions: true,
         cookies: {
           ...auth.cookies,
@@ -358,7 +435,30 @@ export function createNativeSessions<TUser extends TypedUser>(
       },
       hooks: {
         ...config.hooks,
-        afterRead: [...(config.hooks?.afterRead ?? []), protectSession],
+        beforeValidate: [
+          ...(xignetOnly
+            ? [
+                ({ data }: { data?: Record<string, unknown> }) => {
+                  if (
+                    data &&
+                    ['password', 'hash', 'salt'].some(
+                      (key) => data[key] != null,
+                    )
+                  )
+                    throw new APIError(
+                      'Password credentials are disabled for Xignet-only users',
+                      400,
+                    );
+                  return data;
+                },
+              ]
+            : []),
+          ...(config.hooks?.beforeValidate ?? []),
+        ],
+        afterRead: [
+          ...(config.hooks?.afterRead ?? []),
+          ...(xignetOnly ? [] : [protectSession]),
+        ],
         refresh: [refresh],
         afterLogout: [
           ...(config.hooks?.afterLogout ?? []),

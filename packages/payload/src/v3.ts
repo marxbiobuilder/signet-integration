@@ -95,6 +95,11 @@ function snapshot(
 export function createXignetPayload<TUser extends TypedUser>(
   input: XignetPayloadOptions<TUser>,
 ): XignetPayloadIntegration {
+  if (
+    input.sessionAuthentication !== undefined &&
+    !['mixed', 'xignet-only'].includes(input.sessionAuthentication)
+  )
+    throw new Error('Invalid Xignet sessionAuthentication mode');
   const options = Object.freeze({
     ...input,
     login: input.login
@@ -385,6 +390,15 @@ export function createXignetPayload<TUser extends TypedUser>(
         ? Response.json(metadata, { headers: { 'cache-control': 'no-store' } })
         : new Response(null, { status: 404 }),
     plugin: () => async (config: Config) => {
+      if (
+        options.sessionAuthentication === 'xignet-only' &&
+        config.admin?.autoLogin &&
+        (typeof config.admin.autoLogin !== 'object' ||
+          !config.admin.autoLogin.prefillOnly)
+      )
+        throw new Error(
+          'Xignet-only authentication requires admin autoLogin to be disabled',
+        );
       const apiPath = `${config.routes?.api ?? '/api'}/mcp`;
       if (resource.pathname !== apiPath)
         throw new Error(`MCP resource path must equal ${apiPath}`);

@@ -222,7 +222,10 @@ export function createLogin<TUser extends TypedUser>(
           },
         });
         user._sid = sid;
-        user._strategy = 'local-jwt';
+        user._strategy =
+          options.sessionAuthentication === 'xignet-only'
+            ? 'xignet-session'
+            : 'local-jwt';
         req.user = user;
         for (const hook of collectionConfig.hooks.afterLogin) {
           user =

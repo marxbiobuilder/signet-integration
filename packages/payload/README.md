@@ -4,6 +4,40 @@ Xignet resource authorization for Payload v3. The adapter uses the official MCP 
 
 The current test baseline is Payload and `@payloadcms/plugin-mcp` **3.93.0**. No broad v3 or v4 compatibility is declared. The upstream plugin currently resolves `mcp-handler` 1.1.0 with SDK 1.30.0 despite that handler declaring SDK 1.26.0 as its exact peer; the workspace explicitly acknowledges this one tested combination using pnpm.peerDependencyRules.allowedVersions. Strict-peer pnpm consumers must apply the same narrow rule. This does not permit any other SDK version. Do not infer compatibility with other versions from these fixture results.
 
+## Standard plugin: passwordless managed users
+
+```ts
+import { xignetPlugin } from '@xignet/payload';
+
+const xignet = xignetPlugin({
+  resource: 'https://cms.example.com/api/mcp',
+  admissionScopes: ['cms:access'],
+  userCollection: 'users',
+  users: {
+    canManageBindings: (req) => req.user?.collection === 'users' && req.user.role === 'admin',
+    allowUser: (user) => ['admin', 'editor'].includes(user.role),
+    revokeOnFields: ['role'],
+  },
+  mcp: { enabled: true, collections: { bulletins: { find: { scopes: ['cms:read'] } } } },
+  login: { /* dedicated web client and session options shown below */ },
+});
+
+// Standard Payload plugin: buildConfig({ plugins: [xignet] }).
+// The same xignet object works with createXignetRouteHandlers.
+```
+
+The shared provider currently uses `https://signet.marxbio.tech`, the issuer advertised by the production Xignet AS. Projects do not repeat issuer/JWKS settings. A paired `provider: { issuer, jwksUri }` override supports tests or self-hosted Xignet; user data and request headers cannot select the trusted provider.
+
+The plugin adds `xignetIssuer` (read-only), `xignetSubject` and `xignetEnabled`, a compound unique identity index, a built-in resolver and revocation hooks. An administrator creates each local user with their approved subject and project role. The server fills issuer; no email auto-link, self-link or first-login provisioning occurs. Existing issuer namespaces survive unrelated edits; a subject rebind uses the current provider.
+
+Managed users use Payload's supported `disableLocalStrategy: { enableFields: true }`, keeping auth/session fields while disabling local password operations. New records contain no password hash/salt. A custom `xignet-session` strategy accepts only the signed Payload SSO cookie/JWT with a valid native SID, private metadata, current local binding and absolute deadline. It does not accept Xignet access tokens outside MCP. API-key strategies, other auth strategies and automatic Admin login are rejected for this mode. Existing password hashes are retained in additive migrations but cannot authenticate.
+
+Create the first admin through a trusted deployment/seed script using `payload.create` with the approved subject and explicit local role, without a password. Payload's normal public `first-register` password flow is disabled in this mode. After Xignet login, that admin creates subsequent users in the Admin Panel. Generate and review database migrations in each project before enabling the plugin; it never pushes schema at runtime.
+
+## Low-level adapter: custom resolver and mixed authentication
+
+The existing `/v3` API below remains available when a project owns its binding storage or intentionally keeps native password/API-key authentication. Those choices are independent of the standard plugin's Xignet-only policy.
+
 ```ts
 import { createXignetPayload } from '@xignet/payload/v3';
 
@@ -90,7 +124,7 @@ const handlers = createXignetRouteHandlers(xignet, {
 // Export GET = handlers.metadata at the resource's well-known path.
 ```
 
-Provide the app's actual Payload instance lazily. SSO-enabled route factories require this provider. SSO requires the native local auth strategy and `useSessions`; MCP-only consumers may use other auth models. The adapter invokes beforeLogin/afterLogin hooks and composes existing refresh hooks. These HTTP login routes return redirects or generic error responses with no token body.
+Provide the app's actual Payload instance lazily. SSO-enabled route factories require this provider. The low-level adapter's default mixed mode uses native local auth with `useSessions`; the standard plugin uses the dedicated Xignet-only strategy described above. MCP-only low-level consumers may use other auth models. The adapter invokes beforeLogin/afterLogin hooks and composes existing refresh hooks. These HTTP login routes return redirects or generic error responses with no token body.
 
 Next standalone can expose its internal hostname and port in `Request.url`. The Next callback handler uses the trusted Payload `serverURL` as its public origin while retaining the incoming path and query for OIDC validation. Configure `serverURL` to the canonical CMS origin; Host and forwarded-host headers never select that origin. Direct `integration.callback` callers must supply the canonical public request URL themselves.
 
