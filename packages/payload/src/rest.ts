@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import {
   createTokenVerifier,
   hasAllScopes,
-  trustedUrl,
   type VerifiedIdentity,
 } from '@xignet/core';
 import { validateScopes } from '@xignet/core/oauth';
@@ -23,8 +22,6 @@ export interface RestEntityPolicy {
 }
 export interface RestOptions {
   readonly enabled: boolean;
-  /** Separate audience from MCP, e.g. https://cms.example.com/api. */
-  readonly resource: string;
   readonly admissionScopes: readonly string[];
   readonly collections: Readonly<Record<string, RestEntityPolicy>>;
   readonly globals?: Readonly<Record<string, Omit<RestEntityPolicy, 'create'>>>;
@@ -107,19 +104,14 @@ export function createRest<TUser extends TypedUser>(
         throw new Error(
           'Xignet service subject must equal its service client ID',
         );
-    const resource = trustedUrl(rest.resource, options.allowInsecureLoopback);
-    if (
-      resource.origin !== new URL(options.resource).origin ||
-      rest.resource === options.resource
-    )
-      throw new Error('REST requires a separate audience on the CMS origin');
   }
   const verifier =
-    rest && createTokenVerifier({ ...options, audience: rest.resource });
+    rest && createTokenVerifier({ ...options, audience: options.resource });
+  const apiRoot = new URL(options.resource).pathname.replace(/\/mcp$/, '');
   function route(request: Request): readonly string[] | undefined {
     if (!rest) return;
     const path = new URL(request.url).pathname;
-    const root = new URL(rest.resource).pathname;
+    const root = apiRoot;
     if (!path.startsWith(`${root}/`) || /%|\\|\/\//.test(path)) return;
     const relative = path.slice(root.length);
     const endpoint = rest.endpoints?.find(
@@ -208,7 +200,7 @@ export function createRest<TUser extends TypedUser>(
       payload: Payload,
       next: () => Promise<Response>,
     ): Promise<Response> {
-      // MCP owns its own Bearer validation and audience.
+      // MCP owns its own Bearer validation and route policy.
       if (
         !bearer(request.headers) ||
         new URL(request.url).pathname === new URL(options.resource).pathname
@@ -272,8 +264,8 @@ export function createRest<TUser extends TypedUser>(
     },
     enhance(config: Config): Config {
       if (!rest?.enabled) return config;
-      if (new URL(rest.resource).pathname !== (config.routes?.api ?? '/api'))
-        throw new Error('REST resource must equal the Payload API root');
+      if (apiRoot !== (config.routes?.api ?? '/api'))
+        throw new Error('REST API root must match the Payload API route');
       for (const slug of Object.keys(rest.collections)) {
         const collection = config.collections?.find((c) => c.slug === slug);
         if (!collection || collection.auth)

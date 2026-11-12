@@ -165,7 +165,7 @@ Directory audit records use generated `x-request-id` correlation IDs, local acto
 
 ### REST access tokens and API-key migration
 
-REST is opt-in and uses a **separate audience**, normally `https://cms.example.com/api`; an MCP or Directory token is not a REST credential. Configure `rest.enabled`, `resource`, `admissionScopes`, explicit `collections` / `globals` operation scopes, and optional exact custom `endpoints`. Only document GET, collection POST, document PATCH and global GET/POST are supported. Delete, bulk update, auth, versions and GraphQL routes are denied for REST Bearer tokens.
+REST is opt-in and shares the CMS `resource` audience with MCP, normally `https://cms.example.com/api/mcp`. Directory has its own audience. Configure `rest.enabled`, `admissionScopes`, explicit `collections` / `globals` operation scopes, and optional exact custom `endpoints`. REST and MCP each enforce their own route, scope and local access policies. Only document GET, collection POST, document PATCH and global GET/POST are supported by the REST adapter. Delete, bulk update, auth, versions and GraphQL routes are denied for REST Bearer tokens.
 
 ```ts
 const integration = xignetPlugin({
@@ -173,7 +173,6 @@ const integration = xignetPlugin({
   legacyAPIKeys: true, // temporary migration bridge; default is false
   rest: {
     enabled: true,
-    resource: 'https://cms.example.com/api',
     admissionScopes: ['cms:access'],
     collections: {
       pages: { read: ['cms:read'], create: ['cms:write', 'cms:publish'], update: ['cms:write', 'cms:publish'] },
@@ -187,4 +186,4 @@ const integration = xignetPlugin({
 
 Human subjects resolve through the managed local binding and eligibility policy on every request. Services must have the reserved `service:` subject equal to `client_id` and match the local `rest.services` allowlist. Their principal has collection `xignet-services` and no human role, password or session; this is an in-memory principal, not a new database collection. Existing collection/global access control is preserved. Where appropriate, explicitly allow `isXignetService(req)` in the application's **content** access policy; the adapter still caps access to configured operation scopes. Never add this exception to user management or admin access. Field access rules also remain in force.
 
-Keep `legacyAPIKeys: true` only while existing consumers migrate. It does not re-enable passwords. Deploy REST validation first, register environment-specific machine clients for the REST audience and least required scopes, migrate consumers, verify their reads/writes/uploads, then set `legacyAPIKeys: false`. No automatic token-to-API-key fallback exists. Machine authorization revocation at the AS is bounded by the access token's lifetime; removing the local service allowlist entry takes effect with the new configuration. No remote introspection is performed.
+Keep `legacyAPIKeys: true` only while existing consumers migrate. It does not re-enable passwords. Deploy REST validation first, register environment-specific machine clients for the shared CMS audience and least required scopes, migrate consumers, verify their reads/writes/uploads, then set `legacyAPIKeys: false`. No automatic token-to-API-key fallback exists. Machine authorization revocation at the AS is bounded by the access token's lifetime; removing the local service allowlist entry takes effect with the new configuration. No remote introspection is performed.

@@ -49,7 +49,6 @@ async function fixture(t, legacyAPIKeys = false) {
     mcp: { enabled: false, collections: {} },
     rest: {
       enabled: true,
-      resource: `${origin}/api`,
       admissionScopes: ['cms:access'],
       collections: {
         documents: { read: ['cms:read'], create: ['cms:write', 'cms:publish'] },
@@ -137,7 +136,7 @@ async function fixture(t, legacyAPIKeys = false) {
   const sign = (extra = {}) =>
     new SignJWT({
       iss: issuer,
-      aud: `${origin}/api`,
+      aud: `${origin}/api/mcp`,
       sub: 'service:sync',
       client_id: 'service:sync',
       scope: 'cms:access cms:read cms:write cms:publish cms:sync',
@@ -175,7 +174,7 @@ async function fixture(t, legacyAPIKeys = false) {
   };
 }
 
-test('REST validates separate audience, scopes, human bindings and least-privilege service identity', async (t) => {
+test('REST and MCP share an audience while enforcing REST scopes, human bindings and service identity', async (t) => {
   const f = await fixture(t);
   const token = await f.sign();
   let id;
@@ -263,7 +262,7 @@ test('REST validates separate audience, scopes, human bindings and least-privile
     'invalid or unsuitable tokens fail before public fallback or cookie authentication',
     async () => {
       for (const extra of [
-        { aud: 'https://cms.example.test/api/mcp' },
+        { aud: 'https://cms.example.test/api' },
         { aud: 'https://issuer.example.test/directory' },
         { iss: 'https://evil.test' },
         { exp: 1 },
