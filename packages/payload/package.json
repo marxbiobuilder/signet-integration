@@ -1,0 +1,55 @@
+{
+  "name": "@xignet/payload",
+  "version": "0.1.0-beta.0",
+  "type": "module",
+  "description": "Xignet OAuth resource and OIDC integration for Payload v3.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marxbiobuilder/signet-integration.git",
+    "directory": "packages/payload"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    "./v3": {
+      "types": "./dist/v3.d.ts",
+      "import": "./dist/v3.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "prettier --check 'src/**/*.ts' 'test/**/*.mjs'",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "test:cov": "pnpm build && node --experimental-test-coverage --test test/*.test.mjs",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@xignet/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "payload": "3.93.0",
+    "@payloadcms/plugin-mcp": "3.93.0"
+  },
+  "devDependencies": {
+    "payload": "3.93.0",
+    "@payloadcms/plugin-mcp": "3.93.0",
+    "@payloadcms/db-sqlite": "3.93.0",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.12.0",
+    "prettier": "^3.4.2",
+    "jose": "^5.10.0"
+  }
+}
