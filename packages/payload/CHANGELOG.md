@@ -2,6 +2,10 @@
 
 ## 0.1.0-beta.2
 
+- Provision identities through `@xignet/client/directory`: protected Admin lookup, expiring preview confirmation and authoritative revalidation on save.
+- Require verified matching email at login; disallow automatic identity reassignment and revoke sessions when email changes.
+- Retain collection verification checks in the custom session strategy and isolate the SSO-marker regression test.
+
 - Add a standard `xignetPlugin` with a shared provider preset, managed issuer/subject bindings, Admin login component and lifecycle revocation.
 - Support passwordless users with Payload's `disableLocalStrategy` and a dedicated Xignet session strategy; verify native SID, bounded refresh and logout without synthetic passwords.
 - Keep the existing `/v3` mixed-auth adapter available for custom integrations.

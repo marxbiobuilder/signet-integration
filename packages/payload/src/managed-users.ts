@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { canonicalEmail, type DirectoryClient } from '@xignet/client/directory';
+import { directoryBindings } from './directory-binding.js';
 import {
   APIError,
   type CollectionConfig,
@@ -20,24 +23,41 @@ export interface ManagedUsersOptions<TUser extends TypedUser = TypedUser> {
 
 export function createManagedUsers<TUser extends TypedUser>({
   issuer,
+  resource,
+  directory,
   userCollection,
   policy,
   revoke,
 }: {
   issuer: string;
+  resource: string;
+  directory?: DirectoryClient;
   userCollection: string;
   policy: ManagedUsersOptions<TUser>;
   revoke: XignetPayloadIntegration['revokeUserSessions'];
 }) {
+  const bindings = directoryBindings({
+    directory,
+    issuer,
+    collection: userCollection,
+    origin: new URL(resource).origin,
+    canManage: policy.canManageBindings,
+  });
   const changedFields = [
     ...new Set([
+      'email',
       'xignetIssuer',
       'xignetSubject',
       'xignetEnabled',
       ...(policy.revokeOnFields ?? []),
     ]),
   ];
-  const resolveUser: ResolveUser<TUser> = async ({ identity, payload }) => {
+  const resolveUser: ResolveUser<TUser> = async ({
+    identity,
+    payload,
+    channel,
+    login,
+  }) => {
     if (identity.issuer !== issuer)
       return { status: 'denied', reason: 'not_allowed' };
     const found = await payload.find({
@@ -57,7 +77,15 @@ export function createManagedUsers<TUser extends TypedUser>({
       return { status: 'denied', reason: 'not_allowed' };
     const user = found.docs[0] as unknown as TUser & {
       xignetEnabled?: boolean;
+      email?: string;
     };
+    if (
+      channel === 'login' &&
+      (login?.idTokenClaims.email_verified !== true ||
+        typeof login.idTokenClaims.email !== 'string' ||
+        canonicalEmail(login.idTokenClaims.email) !== user.email)
+    )
+      return { status: 'denied', reason: 'not_allowed' };
     if (!user.xignetEnabled) return { status: 'denied', reason: 'disabled' };
     if (!(await policy.allowUser(user)))
       return { status: 'denied', reason: 'not_allowed' };
@@ -65,7 +93,12 @@ export function createManagedUsers<TUser extends TypedUser>({
   };
 
   const enhanceUser = (config: CollectionConfig): CollectionConfig => {
-    const reserved = ['xignetIssuer', 'xignetSubject', 'xignetEnabled'];
+    const reserved = [
+      'xignetIssuer',
+      'xignetSubject',
+      'xignetEnabled',
+      'xignetDirectoryConfirmation',
+    ];
     if (
       config.fields.some(
         (field) => 'name' in field && reserved.includes(field.name),
@@ -78,6 +111,7 @@ export function createManagedUsers<TUser extends TypedUser>({
       policy.canManageBindings(req);
     return {
       ...config,
+      endpoints: [...(config.endpoints || []), bindings.endpoint],
       indexes: [
         ...(config.indexes ?? []),
         {
@@ -87,6 +121,20 @@ export function createManagedUsers<TUser extends TypedUser>({
       ],
       fields: [
         ...config.fields,
+        {
+          name: 'xignetDirectoryConfirmation',
+          type: 'text',
+          virtual: true,
+          access: { read: access, create: access, update: access },
+          admin: {
+            components: {
+              Field: {
+                path: '@xignet/payload/client#XignetDirectoryField',
+                clientProps: { collection: userCollection },
+              },
+            },
+          },
+        },
         {
           name: 'xignetIssuer',
           type: 'text',
@@ -102,8 +150,8 @@ export function createManagedUsers<TUser extends TypedUser>({
           type: 'text',
           label: 'Xignet sub',
           admin: {
-            description:
-              'The approved Xignet subject. Required when creating a user.',
+            readOnly: true,
+            description: '由公司 email 查詢取得的 Xignet 身分。',
           },
           access: { read: access, create: access, update: access },
         },
@@ -121,73 +169,99 @@ export function createManagedUsers<TUser extends TypedUser>({
           ...(config.hooks?.beforeValidate ?? []),
           async ({ data, originalDoc, operation, req }) => {
             if (!data) return data;
-            for (const field of reserved)
-              if (data[field] === undefined) delete data[field];
-            for (const field of ['xignetIssuer', 'xignetSubject'])
-              if (
-                data[field] !== undefined &&
-                data[field] !== null &&
-                typeof data[field] !== 'string'
-              )
-                throw new APIError(`${field} must be a string or null`, 400);
-            const modifiesBinding = reserved.some(
+            const trusted = req.payloadAPI === 'local' && !req.user;
+            const protectedFields = ['email', ...reserved];
+            const changes = protectedFields.some(
               (field) =>
-                Object.hasOwn(data, field) &&
+                data[field] !== undefined &&
                 data[field] !== originalDoc?.[field],
             );
             if (
-              modifiesBinding &&
-              req.payloadAPI !== 'local' &&
+              (operation === 'create' || changes) &&
+              !trusted &&
               !(await policy.canManageBindings(req))
             )
               throw new APIError('Xignet binding management is forbidden', 403);
-            const subject = Object.hasOwn(data, 'xignetSubject')
-              ? data.xignetSubject
-              : originalDoc?.xignetSubject;
-            const hasSubject =
-              typeof subject === 'string' && subject.trim().length > 0;
-            const enabled =
-              data.xignetEnabled ?? originalDoc?.xignetEnabled ?? true;
-            if (!hasSubject && (operation === 'create' || enabled))
-              throw new APIError('An approved Xignet sub is required', 400);
-            // Existing namespaces stay stable during unrelated account edits.
-            const rebinding =
-              hasSubject && subject !== originalDoc?.xignetSubject;
-            const expected = hasSubject
-              ? rebinding
-                ? issuer
-                : originalDoc?.xignetIssuer
-              : null;
-            const supplied = data.xignetIssuer;
-            if (
-              typeof supplied === 'string' &&
-              supplied.trim() &&
-              supplied !== expected &&
-              supplied !== originalDoc?.xignetIssuer
-            )
-              throw new APIError('Xignet issuer is managed by the server', 400);
-            if (
-              hasSubject &&
-              (typeof expected !== 'string' || !expected.trim())
-            )
-              throw new APIError(
-                'The existing Xignet binding is incomplete',
-                400,
+            let email: string;
+            try {
+              email =
+                data.email === undefined
+                  ? originalDoc?.email
+                  : canonicalEmail(data.email);
+            } catch {
+              throw new APIError('請輸入完整公司 email。', 400, null, true);
+            }
+            const needsLookup =
+              operation === 'create' ||
+              email !== originalDoc?.email ||
+              (data.xignetEnabled === true && !originalDoc?.xignetEnabled) ||
+              Boolean(data.xignetDirectoryConfirmation);
+            if (needsLookup) {
+              const identity = await bindings.verify(
+                req,
+                email,
+                data.xignetDirectoryConfirmation,
               );
-            data.xignetIssuer = expected;
-            if (!hasSubject && Object.hasOwn(data, 'xignetSubject'))
-              data.xignetSubject = null;
+              if (
+                operation !== 'create' &&
+                originalDoc?.xignetSubject &&
+                (originalDoc.xignetSubject !== identity.sub ||
+                  originalDoc.xignetIssuer !== identity.issuer)
+              )
+                throw new APIError('現有帳號不能改綁另一個 Xignet 身分。', 409);
+              for (const [field, value] of Object.entries({
+                xignetIssuer: identity.issuer,
+                xignetSubject: identity.sub,
+              })) {
+                if (
+                  data[field] != null &&
+                  data[field] !== '' &&
+                  data[field] !== value
+                )
+                  throw new APIError(
+                    'Xignet identity is managed by Directory',
+                    400,
+                  );
+                data[field] = value;
+              }
+              data.email = identity.email;
+            } else {
+              for (const field of ['xignetIssuer', 'xignetSubject'])
+                if (
+                  data[field] !== undefined &&
+                  data[field] !== originalDoc?.[field]
+                )
+                  throw new APIError(
+                    'Xignet identity is managed by Directory',
+                    400,
+                  );
+            }
+            delete data.xignetDirectoryConfirmation;
             return data;
           },
         ],
         afterChange: [
           ...(config.hooks?.afterChange ?? []),
-          async ({ doc, previousDoc, req }) => {
+          async ({ doc, previousDoc, req, operation }) => {
             if (
+              operation === 'update' &&
               previousDoc &&
               changedFields.some((field) => doc[field] !== previousDoc[field])
             )
               await revoke({ payload: req.payload, userId: doc.id, req });
+            if (
+              operation === 'create' ||
+              !previousDoc ||
+              changedFields.some((field) => doc[field] !== previousDoc[field])
+            )
+              req.payload.logger.info({
+                event: 'xignet_user_changed',
+                outcome: 'applied',
+                requestId: req.context.xignetDirectoryRequestId ?? randomUUID(),
+                actorId: req.user?.id ?? 'trusted-local',
+                userId: doc.id,
+                operation,
+              });
             return doc;
           },
         ],

@@ -81,7 +81,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm --filter @xignet/core build && pnpm --filter @xignet/payload lint
+        run: pnpm --filter @xignet/core --filter @xignet/client build && pnpm --filter @xignet/payload lint
 
       - name: Test
         run: pnpm --filter @xignet/payload test

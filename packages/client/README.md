@@ -44,7 +44,7 @@ the caller must pass their original values without pre-encoding them. The token
 endpoint defaults to `https://xignet.marxbio.tech/oauth2/token`, as advertised by
 Xignet's discovery document. No token URL environment variable is needed.
 For another deployment, pass the optional `tokenUrl` from its discovery document;
-it must use HTTPS and contain no credentials, query or fragment. Redirects are
+it must use HTTPS and contain no credentials, query or fragment (except an explicitly enabled development loopback endpoint). Redirects are
 rejected. This package does not perform runtime discovery, decode the access
 token or manage user sessions. `audience` and `scope` remain required.
 
@@ -209,3 +209,30 @@ Publisher as GitHub owner `marxbiobuilder`, repository `signet-integration`,
 workflow `client-publish.yml`. A first package publication/registration
 and npm organization permissions must be established before relying on OIDC.
 Prereleases are published under their first prerelease identifier, not `latest`.
+
+## Directory identity lookup (preview)
+
+```ts
+import { createDirectoryClient, DirectoryError } from '@xignet/client/directory';
+
+const directory = createDirectoryClient({
+  clientId: process.env.XIGNET_DIRECTORY_CLIENT_ID!, // service: principal
+  clientSecret: process.env.XIGNET_DIRECTORY_CLIENT_SECRET!,
+});
+const identity = await directory.resolve('alice@example.com');
+// { issuer, sub, email }; authorization and local roles remain the caller's responsibility.
+```
+
+This implements the proposed [Xignet Directory contract #179](https://github.com/marxbiotech/signet-marxbio-tech/issues/179). The AS/API must implement and deploy that contract before enabling production provisioning. Fixture tests do not establish upstream availability.
+
+The Directory defaults deliberately select the existing `https://signet.marxbio.tech` issuer and its `/oauth2/token`, `/directory` audience and `/directory/users/resolve` endpoint, matching the current Payload preset and #179. Both Signet and Xignet hostnames advertise their own issuer; do not silently change an existing account's issuer. Explicit `issuer`, `tokenEndpoint`, `resource` and `resolveEndpoint` overrides support another deployment. Token endpoint origin must match issuer, and lookup endpoint origin must match resource. The generic `SignetClient` keeps its existing Xignet token URL default.
+
+The factory reuses `SignetClient` (Basic client credentials, `audience` form parameter, token cache and concurrent acquisition) and `executeWithBearer` (one retry only for a resource 401). It requests `directory:access directory:read`. The service client must be registered with the same audience/scopes and an explicit target CMS lookup boundary. It is independent from human web/MCP clients.
+
+Lookup sends a read-only POST with the full canonical company email in JSON, never in the URL. Only surrounding whitespace and case are normalized; aliases, plus suffixes and dots are not collapsed. Response issuer/email/subject are validated, bodies are bounded to 16 KiB, and one timeout per HTTP request covers headers and body. Default timeout is 5 seconds (configurable up to 30 seconds). No directory result cache is maintained.
+
+`DirectoryError.code` is one of `invalid_email`, `not_found`, `unauthorized`, `forbidden`, `rate_limited`, `unavailable`, `invalid_response`. Resource 404 means no visible resolved identity; it is not permission to create a subject or pin. Token acquisition failures map to `unavailable`. Errors retain no upstream body, token, credentials or raw cause. The SDK does not log. A trusted `fetch` override may be used for tests/proxies and must preserve abort/redirect handling.
+
+`allowInsecureLoopback: true` permits HTTP only on localhost/127.0.0.1/[::1], including the underlying `SignetClient` token exchange. Remote HTTP remains forbidden; production callers should omit this development-only option.
+
+An optional second argument `resolve(email, { requestId })` forwards a caller-generated correlation ID as `x-request-id` (1–64 ASCII letters, digits, underscores or hyphens). Otherwise the SDK generates a UUID. Do not put personal data in correlation IDs.

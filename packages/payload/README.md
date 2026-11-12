@@ -8,11 +8,16 @@ The current test baseline is Payload and `@payloadcms/plugin-mcp` **3.93.0**. No
 
 ```ts
 import { xignetPlugin } from '@xignet/payload';
+import { createDirectoryClient } from '@xignet/client/directory';
 
 const xignet = xignetPlugin({
   resource: 'https://cms.example.com/api/mcp',
   admissionScopes: ['cms:access'],
   userCollection: 'users',
+  directory: createDirectoryClient({
+    clientId: process.env.XIGNET_DIRECTORY_CLIENT_ID!,
+    clientSecret: process.env.XIGNET_DIRECTORY_CLIENT_SECRET!,
+  }),
   users: {
     canManageBindings: (req) => req.user?.collection === 'users' && req.user.role === 'admin',
     allowUser: (user) => ['admin', 'editor'].includes(user.role),
@@ -28,11 +33,15 @@ const xignet = xignetPlugin({
 
 The shared provider currently uses `https://signet.marxbio.tech`, the issuer advertised by the production Xignet AS. Projects do not repeat issuer/JWKS settings. A paired `provider: { issuer, jwksUri }` override supports tests or self-hosted Xignet; user data and request headers cannot select the trusted provider.
 
-The plugin adds `xignetIssuer` (read-only), `xignetSubject` and `xignetEnabled`, a compound unique identity index, a built-in resolver and revocation hooks. An administrator creates each local user with their approved subject and project role. The server fills issuer; no email auto-link, self-link or first-login provisioning occurs. Existing issuer namespaces survive unrelated edits; a subject rebind uses the current provider.
+The plugin owns read-only `xignetIssuer`/`xignetSubject`, `xignetEnabled`, a compound unique identity index, a virtual confirmation field, the Directory lookup endpoint and revocation hooks. An administrator enters a company email, queries Xignet, confirms the identity and chooses a local role. The server resolves the email again on save and checks a five-minute signed preview bound to the acting administrator. A changed result requires a new preview; browser-supplied identity values cannot replace the Directory result. An existing binding cannot transfer to another issuer/subject. Email changes for the same subject, enablement, roles and deletion revoke existing sessions.
+
+`POST /api/<userCollection>/xignet/resolve` requires an authenticated binding manager and an Origin matching the configured resource origin. This uses `@xignet/client/directory` server-side credentials, not the admin's CMS access token. SDK clients must never be exposed to browser code. Omitting `directory` disables provisioning and lookup, while allowing existing users to authenticate. Generate the Payload import map for both `@xignet/payload/components` and `@xignet/payload/client`; the latter requires the matching `@payloadcms/ui` peer.
+
+At browser login the verified ID token must include `email_verified: true` and an email matching the bound local account. MCP continues to resolve only the verified `(issuer, sub)` and local eligibility; it does not expect an ID token or email claim. Directory resolves at provisioning time, not on every session/MCP request. This is not continuous synchronization or instant upstream revocation.
 
 Managed users use Payload's supported `disableLocalStrategy: { enableFields: true }`, keeping auth/session fields while disabling local password operations. New records contain no password hash/salt. A custom `xignet-session` strategy accepts only the signed Payload SSO cookie/JWT with a valid native SID, private metadata, current local binding and absolute deadline. It does not accept Xignet access tokens outside MCP. API-key strategies, other auth strategies and automatic Admin login are rejected for this mode. Existing password hashes are retained in additive migrations but cannot authenticate.
 
-Create the first admin through a trusted deployment/seed script using `payload.create` with the approved subject and explicit local role, without a password. Payload's normal public `first-register` password flow is disabled in this mode. After Xignet login, that admin creates subsequent users in the Admin Panel. Generate and review database migrations in each project before enabling the plugin; it never pushes schema at runtime.
+Create the first admin through a trusted deployment/seed script using `payload.create` with the approved company email and explicit local role, without a password. Payload's normal public `first-register` password flow is disabled in this mode. An unauthenticated trusted server-side Local API create still resolves Directory but does not need an interactive confirmation. Local API calls carrying a user retain permission and preview checks. After Xignet login, that admin creates subsequent users in the Admin Panel. Generate and review database migrations in each project before enabling the plugin; it never pushes schema at runtime.
 
 ## Low-level adapter: custom resolver and mixed authentication
 
@@ -140,7 +149,7 @@ Login failure rolls back SID/metadata when the adapter supports transactions, or
 
 The adapter logs structured MCP operation/transport outcomes with a generated request ID and verified issuer/subject/client/local user, without content bodies or credentials. SSO refusals, service failures and revocation have structured events; unexpected exception messages are not copied into HTTP error responses or logs.
 
-Publish core first, then payload under `payload-vX.Y.Z` using `payload-publish.yml`. Configure npm trusted publishing for both new package names before tagging. Only the exact peer baseline above is supported in this prerelease; Payload's Node requirement is `^22.23.4 || >=24.22.1`; a server runtime is required. Adapter CI verifies Node 22.23.4, 24 and 26.13.1. Core independently supports Node 22.22.0+. The package's Next helpers use standard Request/Response and have no Next.js runtime import.
+Ensure the required core version is available, publish and verify the new client version through `client-publish.yml`, then publish payload under `payload-vX.Y.Z` using `payload-publish.yml`. Configure npm trusted publishing for both new package names before tagging. Only the exact peer baseline above is supported in this prerelease; Payload's Node requirement is `^22.23.4 || >=24.22.1`; a server runtime is required. Adapter CI verifies Node 22.23.4, 24 and 26.13.1. Core independently supports Node 22.22.0+. The package's Next helpers use standard Request/Response and have no Next.js runtime import.
 
 RPC audit events use the server-generated request ID, principal, allowlisted method/tool target and outcome (success, denied, failed, partial_failure or unobserved). They never include tool arguments, response content, access tokens or exception messages. Inspection retains at most 64 KiB per message. Response bytes are forwarded as the consumer reads them, with terminal audit on EOF, error or cancellation; an open stream does not block delivery. An oversized or unreadable request is recorded as unobserved. Official tool response hooks also report execution failures and partial bulk results, even when the transport returns HTTP 200.
 
@@ -151,3 +160,5 @@ For staged rollout, configure the final collection/global policies once and set 
 ## Reusing the adapter
 
 Each CMS supplies its own canonical resource/serverURL, web client, secrets, auth collection, local resolver and collection/global policies. Keep project binding and role rules in that resolver and call `revokeUserSessions` from local lifecycle hooks; mount the shared Next handlers rather than copying the OIDC flow. Tests cover a second CMS profile with a `members` auth collection, separate origin/client/admission scope, native login, refresh and revocation. This fixture verifies configurable reuse; it is not a claim that a second production project has been deployed.
+
+Directory audit records use generated `x-request-id` correlation IDs, local actor/user IDs and fixed operation/outcome/reason fields. Identity values, preview proofs and credentials are not logged. Downstream deployments must preserve the correlation header when forwarding to Directory.

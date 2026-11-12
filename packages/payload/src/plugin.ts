@@ -1,3 +1,4 @@
+import type { DirectoryClient } from '@xignet/client/directory';
 import type { Config, Plugin, TypedUser } from 'payload';
 
 import {
@@ -23,6 +24,8 @@ export type XignetPluginOptions<TUser extends TypedUser = TypedUser> = Omit<
   /** Explicit override for tests or a self-hosted Xignet AS. */
   readonly provider?: { readonly issuer: string; readonly jwksUri: string };
   readonly users: ManagedUsersOptions<TUser>;
+  /** Server-only directory client. Omit to disable account provisioning. */
+  readonly directory?: DirectoryClient;
   readonly admin?: { readonly loginPath?: string; readonly label?: string };
 };
 export type XignetPlugin = Plugin & XignetPayloadIntegration;
@@ -36,6 +39,8 @@ export function xignetPlugin<TUser extends TypedUser>(
   const provider = Object.freeze({ ...(input.provider ?? XIGNET_PROVIDER) });
   const managed = createManagedUsers({
     ...provider,
+    resource: input.resource,
+    directory: input.directory,
     userCollection,
     policy: Object.freeze({
       ...input.users,

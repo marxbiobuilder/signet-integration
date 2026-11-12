@@ -69,6 +69,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @xignet/core test
+      - run: pnpm --filter @xignet/client build
       - run: pnpm --filter @xignet/payload test
 
   client:

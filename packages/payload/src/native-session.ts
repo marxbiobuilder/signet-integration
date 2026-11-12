@@ -320,6 +320,7 @@ export function createNativeSessions<TUser extends TypedUser>(
             disableErrors: true,
           })) as NativeSessionUser | null;
           if (
+            (auth.verify && user?._verified !== true) ||
             !user?.sessions?.some(
               (s) =>
                 s.id === ref.sid &&

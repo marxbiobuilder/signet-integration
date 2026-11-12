@@ -16,7 +16,6 @@ import {
   getFieldsToSign,
   jwtSign,
 } from 'payload';
-import { addSessionToUser } from 'payload/shared';
 import { sqliteAdapter } from '@payloadcms/db-sqlite';
 import { createXignetPayload } from '../dist/v3.js';
 import { createXignetRouteHandlers } from '../dist/next.js';
@@ -32,6 +31,7 @@ async function fixture(
     admissionScope = 'cms:access',
     sessionAuthentication = 'mixed',
     managedUsers = false,
+    verify = false,
   } = {},
 ) {
   const folder = await mkdtemp(join(tmpdir(), 'xignet-sso-'));
@@ -42,6 +42,18 @@ async function fixture(
     alg: 'RS256',
   };
   const codes = new Map();
+  const idTokenClaims = {};
+  const directoryPeople = new Map([
+    ['one@example.test', 'one'],
+    ['editor@example.test', 'two'],
+  ]);
+  const directory = {
+    async resolve(email) {
+      const sub = directoryPeople.get(email);
+      if (!sub) throw new Error('directory unavailable');
+      return { issuer, sub, email };
+    },
+  };
   let issuer;
   let hooks = { before: 0, after: 0 };
   const sign = (subject, audience, extra = {}) =>
@@ -88,7 +100,13 @@ async function fixture(
         JSON.stringify({
           access_token: await sign(entry.subject, `${cmsOrigin}/api/mcp`),
           id_token: await sign(entry.subject, clientId, {
-            email: 'display@example.test',
+            email: managedUsers
+              ? [...directoryPeople].find(
+                  ([, sub]) => sub === entry.subject,
+                )?.[0]
+              : 'display@example.test',
+            email_verified: true,
+            ...idTokenClaims,
           }),
         }),
       );
@@ -106,6 +124,7 @@ async function fixture(
         return xignetPlugin({
           ...rest,
           provider: { issuer, jwksUri },
+          directory,
           users: {
             canManageBindings: (req) => req.user?.role === 'admin',
             allowUser: (user) => ['admin', 'editor'].includes(user.role),
@@ -162,7 +181,7 @@ async function fixture(
     collections: [
       {
         slug: userCollection,
-        auth: { useSessions: true, tokenExpiration: 3600 },
+        auth: { useSessions: true, tokenExpiration: 3600, verify },
         hooks: {
           beforeLogin: [
             ({ user, req }) => {
@@ -223,12 +242,11 @@ async function fixture(
     collection: userCollection,
     data: {
       email: 'one@example.test',
+      ...(verify ? { _verified: true } : {}),
       ...(!managedUsers && sessionAuthentication === 'mixed'
         ? { password: 'fixture-only-password-long' }
         : {}),
-      ...(managedUsers
-        ? { role: 'admin', xignetSubject: 'one' }
-        : { subject: 'one', enabled: true }),
+      ...(managedUsers ? { role: 'admin' } : { subject: 'one', enabled: true }),
     },
   });
   const handlers = createXignetRouteHandlers(integration, {
@@ -241,6 +259,8 @@ async function fixture(
   return {
     payload,
     integration,
+    directoryPeople,
+    idTokenClaims,
     handlers,
     user,
     issuer,
@@ -795,13 +815,13 @@ test('Xignet-only users have no password and use the supported custom session st
     }),
   );
 
-  const req = await createLocalReq({}, f.payload);
-  const { sid } = await addSessionToUser({
-    collectionConfig: collection.config,
-    payload: f.payload,
-    req,
-    user: { ...stored, collection: 'users' },
-  });
+  const signed = await f.signedIn();
+  const sid = decodeJwt(signed.cookie.slice('payload-token='.length)).sid;
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user.id,
+    f.user.id,
+  );
   const unmarked = await jwtSign({
     fieldsToSign: getFieldsToSign({
       collectionConfig: collection.config,
@@ -821,7 +841,6 @@ test('Xignet-only users have no password and use the supported custom session st
     null,
   );
 
-  const signed = await f.signedIn();
   const auth = await f.payload.auth({
     headers: f.requestFor(signed.cookie).headers,
   });
@@ -892,191 +911,269 @@ test('Xignet-only configuration refuses alternative auth entry points', async ()
   );
 });
 
-test('standard plugin manages passwordless accounts from admin-supplied subjects', async (t) => {
+async function preview(f, req, email) {
+  req.text = async () => JSON.stringify({ email });
+  const endpoint = f.payload.collections.users.config.endpoints.find(
+    (e) => e.path === '/xignet/resolve',
+  );
+  return (await endpoint.handler(req)).json();
+}
+
+test('Directory provisioning validates previews, authority, and passwordless identities', async (t) => {
   const f = await fixture(t, false, { managedUsers: true });
   assert.equal(f.user.xignetIssuer, f.issuer);
   assert.equal(f.user.xignetSubject, 'one');
   const admin = await f.signedIn();
   const req = await f.authenticatedReq(admin.cookie);
   req.payloadAPI = 'REST';
-  let editor;
-
-  await t.test(
-    'an authenticated admin creates a passwordless editor with only sub',
-    async () => {
-      editor = await f.payload.create({
-        collection: 'users',
-        req,
-        overrideAccess: false,
-        data: {
-          email: 'editor@example.test',
-          role: 'editor',
-          xignetSubject: 'two',
-        },
-      });
-      assert.equal(editor.xignetIssuer, f.issuer);
-      assert.equal(editor.xignetEnabled, true);
-      const stored = await f.payload.db.findOne({
-        collection: 'users',
-        where: { id: { equals: editor.id } },
-      });
-      assert.ok(!stored.hash && !stored.salt);
-      await assert.rejects(
-        f.payload.create({
-          collection: 'users',
-          req,
-          data: { email: 'missing@example.test', role: 'editor' },
-        }),
-      );
-      await assert.rejects(
-        f.payload.create({
-          collection: 'users',
-          req,
-          data: {
-            email: 'foreign@example.test',
-            role: 'editor',
-            xignetSubject: 'three',
-            xignetIssuer: 'https://foreign.example.test',
-          },
-        }),
-      );
-      await assert.rejects(
-        f.payload.db.create({
-          collection: 'users',
-          data: {
-            email: 'duplicate@example.test',
-            role: 'editor',
-            xignetIssuer: f.issuer,
-            xignetSubject: 'two',
-            xignetEnabled: true,
-          },
-        }),
-      );
+  const lookup = await preview(f, req, 'editor@example.test');
+  const editor = await f.payload.create({
+    collection: 'users',
+    req,
+    overrideAccess: false,
+    data: {
+      email: 'editor@example.test',
+      role: 'editor',
+      xignetDirectoryConfirmation: lookup.confirmation,
     },
+  });
+  assert.equal(editor.xignetSubject, 'two');
+  assert.equal(editor.xignetIssuer, f.issuer);
+  const stored = await f.payload.db.findOne({
+    collection: 'users',
+    where: { id: { equals: editor.id } },
+  });
+  assert.ok(
+    !stored.hash && !stored.salt && !stored.xignetDirectoryConfirmation,
+  );
+  for (const operation of [
+    () =>
+      f.payload.login({
+        collection: 'users',
+        data: { email: editor.email, password: 'no-password' },
+      }),
+    () =>
+      f.payload.forgotPassword({
+        collection: 'users',
+        data: { email: editor.email },
+      }),
+    () =>
+      f.payload.update({
+        collection: 'users',
+        id: editor.id,
+        data: { password: 'cannot-enable-password' },
+      }),
+  ])
+    await assert.rejects(operation);
+
+  f.directoryPeople.set('other@example.test', 'three');
+  await assert.rejects(
+    f.payload.create({
+      collection: 'users',
+      req,
+      data: { email: 'other@example.test', role: 'editor' },
+    }),
+    /重新查詢/,
+  );
+  const other = await preview(f, req, 'other@example.test');
+  await assert.rejects(
+    f.payload.create({
+      collection: 'users',
+      req,
+      data: {
+        email: 'other@example.test',
+        role: 'editor',
+        xignetSubject: 'forged',
+        xignetDirectoryConfirmation: other.confirmation,
+      },
+    }),
+    /managed by Directory/,
+  );
+  f.directoryPeople.set('other@example.test', 'changed-after-preview');
+  await assert.rejects(
+    f.payload.create({
+      collection: 'users',
+      req,
+      data: {
+        email: 'other@example.test',
+        role: 'editor',
+        xignetDirectoryConfirmation: other.confirmation,
+      },
+    }),
+    /重新查詢/,
+  );
+  assert.equal(
+    (
+      await f.payload.find({
+        collection: 'users',
+        where: { email: { equals: 'other@example.test' } },
+      })
+    ).totalDocs,
+    0,
   );
 
-  await t.test(
-    'native password operations cannot enable password login',
-    async () => {
-      const forbidden = (error) => error.status === 403;
-      await assert.rejects(
-        f.payload.login({
-          collection: 'users',
-          data: {
-            email: editor.email,
-            password: 'unused-password',
-          },
-        }),
-        forbidden,
-      );
-      await assert.rejects(
-        f.payload.forgotPassword({
-          collection: 'users',
-          data: {
-            email: editor.email,
-          },
-        }),
-        forbidden,
-      );
-      await f.payload.db.updateOne({
-        collection: 'users',
-        id: editor.id,
-        data: {
-          resetPasswordToken: 'fixture-reset-token',
-          resetPasswordExpiration: new Date(Date.now() + 60000).toISOString(),
-        },
-      });
-      await assert.rejects(
-        f.payload.resetPassword({
-          collection: 'users',
-          data: {
-            token: 'fixture-reset-token',
-            password: 'cannot-install-password',
-          },
-        }),
-        forbidden,
-      );
-      const stored = await f.payload.db.findOne({
-        collection: 'users',
-        where: { id: { equals: editor.id } },
-      });
-      assert.ok(!stored.hash && !stored.salt);
-    },
+  const signed = await f.complete(await f.begin('two'));
+  assert.equal(signed.response.status, 303);
+  const editorReq = await f.authenticatedReq(signed.cookie);
+  editorReq.payloadAPI = 'REST';
+  await assert.rejects(
+    preview(f, editorReq, 'other@example.test'),
+    /Forbidden/,
+  );
+  await assert.rejects(
+    f.payload.update({
+      collection: 'users',
+      id: editor.id,
+      req: editorReq,
+      data: { email: 'other@example.test' },
+    }),
+    /forbidden/,
+  );
+  await f.payload.update({
+    collection: 'users',
+    id: editor.id,
+    req,
+    data: { role: 'admin' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
   );
 
-  await t.test(
-    'editor signs in with Xignet but cannot change bindings',
-    async () => {
-      const signed = await f.complete(await f.begin('two'));
-      assert.equal(signed.response.status, 303);
-      const editorReq = await f.authenticatedReq(signed.cookie);
-      editorReq.payloadAPI = 'REST';
-      await f.payload.update({
-        collection: 'users',
-        id: editor.id,
-        req: editorReq,
-        overrideAccess: false,
-        data: { xignetSubject: 'other' },
-      });
-      const unchanged = await f.payload.db.findOne({
-        collection: 'users',
-        where: { id: { equals: editor.id } },
-      });
-      assert.equal(unchanged.xignetSubject, 'two');
-      assert.equal(unchanged.xignetIssuer, f.issuer);
-      await f.payload.update({
-        collection: 'users',
-        id: editor.id,
-        req,
-        data: { role: 'admin' },
-      });
-      assert.equal(
-        (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
-          .user,
-        null,
-      );
-    },
+  // Same email changing to another subject never silently transfers a local role.
+  f.directoryPeople.set('editor@example.test', 'replacement');
+  const changed = await preview(f, req, 'editor@example.test');
+  await assert.rejects(
+    f.payload.update({
+      collection: 'users',
+      id: editor.id,
+      req,
+      data: { xignetDirectoryConfirmation: changed.confirmation },
+    }),
+    /不能改綁/,
   );
+  assert.equal(
+    (await f.complete(await f.begin('replacement'))).response.status,
+    403,
+  );
+});
 
-  await t.test(
-    'historical issuer stays stable until an explicit subject rebind',
-    async () => {
-      const previous = 'https://previous.example.test';
-      await f.payload.db.updateOne({
-        collection: 'users',
-        id: editor.id,
-        data: { xignetIssuer: previous },
-      });
-      const preserved = await f.payload.update({
-        collection: 'users',
-        id: editor.id,
-        req,
-        data: { role: 'editor' },
-      });
-      assert.equal(preserved.xignetIssuer, previous);
-      await assert.rejects(
-        f.payload.update({
-          collection: 'users',
-          id: editor.id,
-          req,
-          data: { xignetIssuer: f.issuer },
-        }),
-      );
-      const rebound = await f.payload.update({
-        collection: 'users',
-        id: editor.id,
-        req,
-        data: { xignetSubject: 'new-two', xignetIssuer: previous },
-      });
-      assert.equal(rebound.xignetIssuer, f.issuer);
-      assert.equal(
-        (await f.complete(await f.begin('two'))).response.status,
-        403,
-      );
-      assert.equal(
-        (await f.complete(await f.begin('new-two'))).response.status,
-        303,
-      );
-    },
+test('Xignet-only strategy rejects a session after verified status is removed', async (t) => {
+  const f = await fixture(t, false, {
+    sessionAuthentication: 'xignet-only',
+    verify: true,
+  });
+  const signed = await f.signedIn();
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user.id,
+    f.user.id,
   );
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { _verified: false },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
+  );
+});
+
+test('managed login requires the verified matching mailbox without rewriting the binding', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  for (const claims of [
+    { email: 'another@example.test' },
+    { email: undefined },
+    { email_verified: false },
+    { email_verified: undefined },
+  ]) {
+    for (const key of Object.keys(f.idTokenClaims)) delete f.idTokenClaims[key];
+    Object.assign(f.idTokenClaims, claims);
+    const rejected = await f.complete(await f.begin());
+    assert.equal(rejected.response.status, 403);
+    assert.equal(rejected.cookie, undefined);
+    assert.equal(
+      (await f.payload.count({ collection: 'xignet-sessions' })).totalDocs,
+      0,
+    );
+    const user = await f.payload.findByID({
+      collection: 'users',
+      id: f.user.id,
+    });
+    assert.equal(user.email, 'one@example.test');
+    assert.equal(user.xignetSubject, 'one');
+  }
+  for (const key of Object.keys(f.idTokenClaims)) delete f.idTokenClaims[key];
+  assert.equal((await f.signedIn()).response.status, 303);
+});
+
+test('Directory preview rejects invalid origin, tampering, expiry and another actor', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const admin = await f.signedIn();
+  const req = await f.authenticatedReq(admin.cookie);
+  req.payloadAPI = 'REST';
+  const lookup = await preview(f, req, 'editor@example.test');
+  const other = await f.payload.create({
+    collection: 'users',
+    data: {
+      email: 'editor@example.test',
+      role: 'admin',
+    },
+  });
+  const claims = decodeJwt(lookup.confirmation);
+  const expired = await new SignJWT({
+    ...claims,
+    exp: Math.floor(Date.now() / 1000) - 5,
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .sign(
+      createHash('sha256')
+        .update(`xignet-directory-confirmation:${f.payload.secret}`)
+        .digest(),
+    );
+  for (const confirmation of [
+    expired,
+    lookup.confirmation.replace(/\.[^.]+$/, '.invalidsignature'),
+  ])
+    await assert.rejects(
+      f.payload.update({
+        collection: 'users',
+        id: other.id,
+        req,
+        data: { xignetDirectoryConfirmation: confirmation },
+      }),
+      /重新查詢/,
+    );
+  const otherLogin = await f.complete(await f.begin('two'));
+  const otherReq = await f.authenticatedReq(otherLogin.cookie);
+  otherReq.payloadAPI = 'REST';
+  await assert.rejects(
+    f.payload.update({
+      collection: 'users',
+      id: other.id,
+      req: otherReq,
+      data: { xignetDirectoryConfirmation: lookup.confirmation },
+    }),
+    /重新查詢/,
+  );
+  for (const origin of [null, 'https://foreign.example.test']) {
+    if (origin === null) req.headers.delete('origin');
+    else req.headers.set('origin', origin);
+    await assert.rejects(
+      preview(f, req, 'editor@example.test'),
+      /Forbidden origin/,
+    );
+  }
+  req.headers.set('origin', f.cmsOrigin);
+  const updated = await f.payload.update({
+    collection: 'users',
+    id: other.id,
+    req,
+    data: { xignetDirectoryConfirmation: lookup.confirmation },
+  });
+  assert.equal(updated.xignetSubject, 'two');
+  assert.equal((await f.payload.count({ collection: 'users' })).totalDocs, 2);
 });
