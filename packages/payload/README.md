@@ -39,7 +39,7 @@ The plugin owns read-only `xignetIssuer`/`xignetSubject`, `xignetEnabled`, a com
 
 At browser login the verified ID token must include `email_verified: true` and an email matching the bound local account. MCP continues to resolve only the verified `(issuer, sub)` and local eligibility; it does not expect an ID token or email claim. Directory resolves at provisioning time, not on every session/MCP request. This is not continuous synchronization or instant upstream revocation.
 
-Managed users use Payload's supported `disableLocalStrategy: { enableFields: true }`, keeping auth/session fields while disabling local password operations. New records contain no password hash/salt. A custom `xignet-session` strategy accepts only the signed Payload SSO cookie/JWT with a valid native SID, private metadata, current local binding and absolute deadline. It does not accept Xignet access tokens outside MCP. API-key strategies, other auth strategies and automatic Admin login are rejected for this mode. Existing password hashes are retained in additive migrations but cannot authenticate.
+Managed users use Payload's supported `disableLocalStrategy: { enableFields: true }`, keeping auth/session fields while disabling local password operations. New records contain no password hash/salt. A custom `xignet-session` strategy accepts only the signed Payload SSO cookie/JWT with a valid native SID, private metadata, current local binding and absolute deadline. The session strategy does not accept Xignet access tokens; optional REST and MCP adapters validate those separately. API keys require the explicit transitional `legacyAPIKeys` option. Unmanaged custom strategies and automatic Admin login are rejected for this mode. Existing password hashes are retained in additive migrations but cannot authenticate.
 
 Create the first admin through a trusted deployment/seed script using `payload.create` with the approved company email and explicit local role, without a password. Payload's normal public `first-register` password flow is disabled in this mode. An unauthenticated trusted server-side Local API create still resolves Directory but does not need an interactive confirmation. Local API calls carrying a user retain permission and preview checks. After Xignet login, that admin creates subsequent users in the Admin Panel. Generate and review database migrations in each project before enabling the plugin; it never pushes schema at runtime.
 
@@ -80,7 +80,7 @@ export const GET = handlers.metadata;
 
 The example's `resolveExistingLocalUser` belongs to the project, not this package. A successful resolver must return a real Payload user with an ID and the configured auth collection discriminator. Resolver failures propagate; they do not become an unbound-user response.
 
-For a resource at `/api/mcp`, mount metadata at `/.well-known/oauth-protected-resource/api/mcp`. The resource origin must match configured `serverURL`, and its path must match the Payload API route plus `/mcp`. Trust settings are fixed configuration, never derived from request Host headers or token claims. Only the MCP routes accept Xignet Bearer; no global authentication strategy or cookie/API-key fallback is installed.
+For a resource at `/api/mcp`, mount metadata at `/.well-known/oauth-protected-resource/api/mcp`. The resource origin must match configured `serverURL`, and its path must match the Payload API route plus `/mcp`. Trust settings are fixed configuration, never derived from request Host headers or token claims. MCP validates its own Bearer tokens without cookie/API-key fallback. Optional REST support installs a separate authentication strategy and requires the HTTP boundary described below.
 
 MCP operations require explicit scopes. Unsupported/unlisted operations, entities and experimental tools are closed. Deletion is not supported in this prerelease. The API-key collection added by the official plugin is hidden and denied to API callers; its schema is retained even with MCP disabled, so projects must include it in migrations. `mcp.enabled: false` removes the MCP routes and returns 404 metadata.
 
@@ -162,3 +162,29 @@ For staged rollout, configure the final collection/global policies once and set 
 Each CMS supplies its own canonical resource/serverURL, web client, secrets, auth collection, local resolver and collection/global policies. Keep project binding and role rules in that resolver and call `revokeUserSessions` from local lifecycle hooks; mount the shared Next handlers rather than copying the OIDC flow. Tests cover a second CMS profile with a `members` auth collection, separate origin/client/admission scope, native login, refresh and revocation. This fixture verifies configurable reuse; it is not a claim that a second production project has been deployed.
 
 Directory audit records use generated `x-request-id` correlation IDs, local actor/user IDs and fixed operation/outcome/reason fields. Identity values, preview proofs and credentials are not logged. Downstream deployments must preserve the correlation header when forwarding to Directory.
+
+### REST access tokens and API-key migration
+
+REST is opt-in and uses a **separate audience**, normally `https://cms.example.com/api`; an MCP or Directory token is not a REST credential. Configure `rest.enabled`, `resource`, `admissionScopes`, explicit `collections` / `globals` operation scopes, and optional exact custom `endpoints`. Only document GET, collection POST, document PATCH and global GET/POST are supported. Delete, bulk update, auth, versions and GraphQL routes are denied for REST Bearer tokens.
+
+```ts
+const integration = xignetPlugin({
+  // Existing provider, users, MCP and login configuration...
+  legacyAPIKeys: true, // temporary migration bridge; default is false
+  rest: {
+    enabled: true,
+    resource: 'https://cms.example.com/api',
+    admissionScopes: ['cms:access'],
+    collections: {
+      pages: { read: ['cms:read'], create: ['cms:write', 'cms:publish'], update: ['cms:write', 'cms:publish'] },
+    },
+    services: [{ subject: 'service:cms-sync', clientId: 'service:cms-sync' }],
+  },
+})
+```
+
+**Wrap every Payload REST HTTP method** with `integration.rest(request, payload, () => originalHandler(request, context))`. This boundary is required: Payload catches strategy exceptions and otherwise may continue as anonymous. The wrapper rejects an invalid Bearer token before dispatch, independently of any cookie. It carries the verified principal through the request's async context, so authentication cannot silently fall back after a second lookup. MCP keeps its existing endpoint validation. Browser cookie requests and transitional API-key requests retain normal Payload behavior. Other custom HTTP/GraphQL entry points must not reuse REST credentials.
+
+Human subjects resolve through the managed local binding and eligibility policy on every request. Services must have the reserved `service:` subject equal to `client_id` and match the local `rest.services` allowlist. Their principal has collection `xignet-services` and no human role, password or session; this is an in-memory principal, not a new database collection. Existing collection/global access control is preserved. Where appropriate, explicitly allow `isXignetService(req)` in the application's **content** access policy; the adapter still caps access to configured operation scopes. Never add this exception to user management or admin access. Field access rules also remain in force.
+
+Keep `legacyAPIKeys: true` only while existing consumers migrate. It does not re-enable passwords. Deploy REST validation first, register environment-specific machine clients for the REST audience and least required scopes, migrate consumers, verify their reads/writes/uploads, then set `legacyAPIKeys: false`. No automatic token-to-API-key fallback exists. Machine authorization revocation at the AS is bounded by the access token's lifetime; removing the local service allowlist entry takes effect with the new configuration. No remote introspection is performed.

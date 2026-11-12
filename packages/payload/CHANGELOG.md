@@ -2,6 +2,9 @@
 
 ## 0.1.0-beta.2
 
+- Add opt-in REST Bearer validation with a distinct audience, human binding checks, explicitly approved service principals, operation scopes and an HTTP boundary that prevents anonymous/cookie fallback.
+- Add `legacyAPIKeys` as a temporary compatibility switch, independent of passwordless human login. REST does not grant admin, delete, bulk-write, auth or GraphQL capabilities.
+
 - Provision identities through `@xignet/client/directory`: protected Admin lookup, expiring preview confirmation and authoritative revalidation on save.
 - Require verified matching email at login; disallow automatic identity reassignment and revoke sessions when email changes.
 - Retain collection verification checks in the custom session strategy and isolate the SSO-marker regression test.

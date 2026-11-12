@@ -32,6 +32,7 @@ import type {
 } from './types.js';
 
 import { createNativeSessions, SESSION_COLLECTION } from './native-session.js';
+import { createRest } from './rest.js';
 import { createLogin } from './login.js';
 import { inspectRpc, observeRpc, rpcMethod } from './rpc-audit.js';
 
@@ -336,6 +337,7 @@ export function createXignetPayload<TUser extends TypedUser>(
     return p;
   };
 
+  const rest = createRest(options);
   const sessions = createNativeSessions(options);
   const login = createLogin(options, sessions);
   const tools = new Map<
@@ -389,6 +391,7 @@ export function createXignetPayload<TUser extends TypedUser>(
       enabled
         ? Response.json(metadata, { headers: { 'cache-control': 'no-store' } })
         : new Response(null, { status: 404 }),
+    rest: rest.handle,
     plugin: () => async (config: Config) => {
       if (
         options.sessionAuthentication === 'xignet-only' &&
@@ -477,7 +480,7 @@ export function createXignetPayload<TUser extends TypedUser>(
         throw new Error(
           'Install Xignet MCP once; another /mcp endpoint already exists',
         );
-      const result = await mcpPlugin(mcpOptions)(config);
+      const result = rest.enhance(await mcpPlugin(mcpOptions)(config));
       if (!enabled) return result;
       result.collections = result.collections?.map((c) => {
         const p = collections[c.slug];

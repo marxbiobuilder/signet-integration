@@ -282,7 +282,10 @@ export function createNativeSessions<TUser extends TypedUser>(
         throw new Error('SSO requires native Payload auth with sessions');
       return config;
     }
-    if (xignetOnly && (auth.useAPIKey || auth.strategies?.length))
+    if (
+      xignetOnly &&
+      ((auth.useAPIKey && !options.legacyAPIKeys) || auth.strategies?.length)
+    )
       throw new Error(
         'Xignet-only sessions cannot compose API-key or other authentication strategies',
       );
@@ -297,6 +300,8 @@ export function createNativeSessions<TUser extends TypedUser>(
             },
             payload,
           ));
+        if (/^Bearer(?:\s|$)/i.test(headers.get('authorization') ?? ''))
+          return { user: null };
         try {
           const ref = await reference(req, headers);
           if (
@@ -421,7 +426,7 @@ export function createNativeSessions<TUser extends TypedUser>(
         ...(xignetOnly
           ? {
               disableLocalStrategy: { enableFields: true },
-              useAPIKey: false,
+              useAPIKey: options.legacyAPIKeys === true,
               strategies: [strategy],
             }
           : {}),

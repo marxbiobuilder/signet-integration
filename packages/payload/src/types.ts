@@ -16,7 +16,7 @@ export type UserResolution<TUser extends TypedUser = TypedUser> =
 
 export type ResolveUser<TUser extends TypedUser = TypedUser> = (input: {
   identity: VerifiedIdentity;
-  channel: 'login' | 'mcp' | 'session';
+  channel: 'login' | 'mcp' | 'session' | 'rest';
   payload: Payload;
   login?: { idTokenClaims: Readonly<Record<string, unknown>> };
 }) => Promise<UserResolution<TUser>>;
@@ -49,11 +49,14 @@ export interface EntityPolicy {
 export interface XignetPayloadOptions<
   TUser extends TypedUser = TypedUser,
 > extends Omit<TokenVerifierOptions, 'audience'> {
+  /** Transitional opt-in. Disable after all API-key consumers have migrated. */
+  readonly legacyAPIKeys?: boolean;
+  readonly rest?: import('./rest.js').RestOptions;
   readonly resource: string;
   readonly admissionScopes: readonly string[];
   readonly userCollection: CollectionSlug;
   readonly resolveUser: ResolveUser<TUser>;
-  /** xignet-only uses a custom session strategy and disables password/API-key auth. */
+  /** xignet-only disables passwords; API keys require the explicit legacyAPIKeys bridge. */
   readonly sessionAuthentication?: 'mixed' | 'xignet-only';
   readonly login?: {
     readonly enabled: boolean;
@@ -80,6 +83,12 @@ export interface XignetPayloadOptions<
 
 export interface XignetPayloadIntegration {
   readonly loginEnabled: boolean;
+  /** Wrap every Payload REST method to reject Bearer failures before dispatch. */
+  rest(
+    request: Request,
+    payload: Payload,
+    next: () => Promise<Response>,
+  ): Promise<Response>;
   plugin(): Plugin;
   /** HTTP metadata response; mount at the resource's well-known path. */
   metadata(): Response;

@@ -94,3 +94,6 @@ export function xignetPlugin<TUser extends TypedUser>(
 }
 
 export type { ManagedUsersOptions } from './managed-users.js';
+
+export { isXignetService } from './rest.js';
+export type { RestOptions, RestEntityPolicy } from './rest.js';
