@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.1
+
+- Validate GitHub Actions OIDC publishing after initial package registration.
+
 ## 0.1.0-beta.0
 
 - Add Xignet verification and scoped authorization around the official Payload 3.93 MCP plugin.

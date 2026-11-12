@@ -1,6 +1,6 @@
 # @xignet/payload
 
-Xignet resource authorization for Payload v3. The adapter uses the official MCP plugin and applies token scopes together with existing Payload collection, document and field access. This package is under implementation and has not been published. MCP and native-session OIDC are implemented; website rollout and final delivery review remain in progress under the [implementation plan](../../docs/architecture/core-payload-implementation-plan.md).
+Xignet resource authorization for Payload v3. The adapter uses the official MCP plugin and applies token scopes together with existing Payload collection, document and field access. This is a preview SDK with MCP and native-session OIDC support; website rollout and final delivery verification remain in progress under the [implementation plan](../../docs/architecture/core-payload-implementation-plan.md).
 
 The current test baseline is Payload and `@payloadcms/plugin-mcp` **3.93.0**. No broad v3 or v4 compatibility is declared. The upstream plugin currently resolves `mcp-handler` 1.1.0 with SDK 1.30.0 despite that handler declaring SDK 1.26.0 as its exact peer; the workspace explicitly acknowledges this one tested combination using pnpm.peerDependencyRules.allowedVersions. Strict-peer pnpm consumers must apply the same narrow rule. This does not permit any other SDK version. Do not infer compatibility with other versions from these fixture results.
 
