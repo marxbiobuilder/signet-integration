@@ -67,6 +67,8 @@ export interface XignetPayloadOptions<
   };
   readonly mcp: {
     readonly enabled: boolean;
+    /** Disable mutation capabilities without changing configured schemas. Defaults to true. */
+    readonly writesEnabled?: boolean;
     readonly collections: Readonly<Record<string, EntityPolicy>>;
     readonly globals?: Readonly<Record<string, Omit<EntityPolicy, 'create'>>>;
     /** Include scopes returned dynamically by mutationPolicy. */

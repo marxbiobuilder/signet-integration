@@ -107,6 +107,7 @@ export function createXignetPayload<TUser extends TypedUser>(
     admissionScopes: Object.freeze([...input.admissionScopes]),
   });
   const enabled = input.mcp.enabled;
+  const writesEnabled = input.mcp.writesEnabled !== false;
   const collections = snapshot(input.mcp.collections);
   const globals = snapshot(input.mcp.globals);
   const entries = [...Object.entries(collections), ...Object.entries(globals)];
@@ -201,6 +202,7 @@ export function createXignetPayload<TUser extends TypedUser>(
         const p = principal(args.req);
         if (
           !p ||
+          (operation !== 'find' && !writesEnabled) ||
           !policy?.[operation] ||
           !hasAllScopes(p.identity, [
             ...options.admissionScopes,
@@ -233,6 +235,7 @@ export function createXignetPayload<TUser extends TypedUser>(
       const op = policy[operation];
       if (
         !p ||
+        !writesEnabled ||
         !op ||
         !policy.mutationPolicy ||
         !hasAllScopes(p.identity, op.scopes)
@@ -265,7 +268,11 @@ export function createXignetPayload<TUser extends TypedUser>(
       result[camelCase(slug)] = Object.fromEntries([
         ...operations.map((op) => [
           op,
-          Boolean(policy[op] && hasAllScopes(p.identity, policy[op]!.scopes)),
+          Boolean(
+            (op === 'find' || writesEnabled) &&
+            policy[op] &&
+            hasAllScopes(p.identity, policy[op]!.scopes),
+          ),
         ]),
         ['delete', false],
       ]);
@@ -326,8 +333,14 @@ export function createXignetPayload<TUser extends TypedUser>(
 
   const sessions = createNativeSessions(options);
   const login = createLogin(options, sessions);
-  const toolTargets = new Map<string, string>();
-  const toolScopes = new Map<string, readonly string[]>();
+  const tools = new Map<
+    string,
+    {
+      readonly target: string;
+      readonly scopes: readonly string[];
+      readonly operation: MCPOperation;
+    }
+  >();
   for (const [kind, policies] of [
     ['collection', collections],
     ['global', globals],
@@ -336,11 +349,11 @@ export function createXignetPayload<TUser extends TypedUser>(
       for (const op of operations)
         if (policy[op]) {
           const name = `${op}${slug.charAt(0).toUpperCase()}${camelCase(slug).slice(1)}`;
-          toolScopes.set(name, policy[op]!.scopes);
-          toolTargets.set(
-            `${op}${slug.charAt(0).toUpperCase()}${camelCase(slug).slice(1)}`,
-            `${kind}:${slug}`,
-          );
+          tools.set(name, {
+            target: `${kind}:${slug}`,
+            scopes: policy[op]!.scopes,
+            operation: op,
+          });
         }
   const toolResponse = (
     response: { content: Array<{ text: string; type: string }> },
@@ -552,14 +565,13 @@ export function createXignetPayload<TUser extends TypedUser>(
                     'name' in rpc.params
                       ? rpc.params.name
                       : undefined;
-                  const target =
-                    typeof name === 'string'
-                      ? toolTargets.get(name)
-                      : undefined;
+                  const tool =
+                    typeof name === 'string' ? tools.get(name) : undefined;
+                  const target = tool?.target;
                   if (
-                    typeof name === 'string' &&
-                    toolScopes.has(name) &&
-                    !hasAllScopes(p.identity, toolScopes.get(name)!)
+                    tool &&
+                    (!hasAllScopes(p.identity, tool.scopes) ||
+                      (tool.operation !== 'find' && !writesEnabled))
                   )
                     p.rpc.outcome = 'denied';
                   const response = await endpoint.handler(req);

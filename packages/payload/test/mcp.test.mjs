@@ -12,7 +12,7 @@ import { sqliteAdapter } from '@payloadcms/db-sqlite';
 import { createXignetPayload } from '../dist/v3.js';
 import { createXignetRouteHandlers } from '../dist/next.js';
 
-async function fixture(t) {
+async function fixture(t, writesEnabled = true) {
   // mcp-handler owns a process-wide cleanup interval with no public dispose.
   // Explicitly release intervals created by this fixture after all assertions.
   const intervals = new Set();
@@ -67,6 +67,7 @@ async function fixture(t) {
     },
     mcp: {
       enabled: true,
+      writesEnabled,
       collections: {
         bulletins: {
           find: { scopes: ['cms:read'] },
@@ -143,7 +144,16 @@ async function fixture(t) {
     ],
     plugins: [xignet.plugin()],
   });
-  const payload = await getPayload({ config });
+  const oldForcePush = process.env.PAYLOAD_FORCE_DRIZZLE_PUSH;
+  process.env.PAYLOAD_FORCE_DRIZZLE_PUSH = 'true';
+  let payload;
+  try {
+    payload = await getPayload({ config, key: folder });
+  } finally {
+    if (oldForcePush === undefined)
+      delete process.env.PAYLOAD_FORCE_DRIZZLE_PUSH;
+    else process.env.PAYLOAD_FORCE_DRIZZLE_PUSH = oldForcePush;
+  }
   t.after(async () => {
     await payload.destroy();
     await new Promise((resolve) => server.close(resolve));
@@ -663,4 +673,58 @@ test('unsafe or ambiguous MCP policies are rejected at configuration', async () 
     }),
     /already exists/,
   );
+});
+
+test('read-only rollout hides and denies mutations without changing schema', async (t) => {
+  const f = await fixture(t, false);
+  const token = await f.token('cms:access cms:read cms:write cms:publish');
+  const listed = await f.request('tools/list', {}, token);
+  assert.deepEqual(
+    listed.data.result.tools.map((tool) => tool.name),
+    ['findBulletins', 'findSiteStatus'],
+  );
+  const denied = await f.request(
+    'tools/call',
+    {
+      name: 'updateBulletins',
+      arguments: { id: f.doc.id, title: 'must-stay-readonly' },
+    },
+    token,
+  );
+  assert.ok(denied.data.error || denied.data.result?.isError);
+  await assert.rejects(
+    f.payload.update({
+      collection: 'bulletins',
+      id: f.doc.id,
+      data: { title: 'no-local-bypass' },
+      overrideAccess: false,
+      req: listed.req,
+    }),
+    (error) => error.status === 403,
+  );
+  assert.equal(
+    (await f.payload.findByID({ collection: 'bulletins', id: f.doc.id })).title,
+    'visible-for-one',
+  );
+  const base = {
+    secret: 'fixture-only',
+    serverURL: f.options.issuer,
+    collections: [
+      { slug: 'users', auth: true, fields: [] },
+      { slug: 'bulletins', fields: [] },
+    ],
+    globals: [{ slug: 'site-status', fields: [] }],
+  };
+  const schema = async (enabled, writesEnabled) => {
+    const integration = createXignetPayload({
+      ...f.options,
+      mcp: { ...f.options.mcp, enabled, writesEnabled },
+    });
+    const result = await integration.plugin()(structuredClone(base));
+    return JSON.stringify(
+      result.collections.map(({ slug, fields }) => ({ slug, fields })),
+    );
+  };
+  assert.equal(await schema(false, false), await schema(true, false));
+  assert.equal(await schema(true, false), await schema(true, true));
 });
