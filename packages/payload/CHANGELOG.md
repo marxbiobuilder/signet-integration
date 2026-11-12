@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.3
+
+- Use the CMS `/api/mcp` resource audience for both MCP and opt-in REST access tokens. REST still applies its own admission scopes, route allowlist, operation scopes and local access rules.
+- Consumers of the REST adapter must request tokens for the shared CMS resource; tokens for the former `/api` audience are rejected. Existing service client grants may need to be moved to the `/api/mcp` resource.
+
 ## 0.1.0-beta.2
 
 - Add opt-in REST Bearer validation with a distinct audience, human binding checks, explicitly approved service principals, operation scopes and an HTTP boundary that prevents anonymous/cookie fallback.
