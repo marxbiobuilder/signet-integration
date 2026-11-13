@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Release the server-only Directory identity lookup API as stable, with deployed Xignet defaults, validated responses, token caching and bounded read-only retry.
+- Preserve the existing client-credentials and Bearer request APIs; explicit Signet issuer overrides remain supported.
+
 ## 0.3.0-beta.1
 
 - Point Directory defaults at the deployed `https://xignet.marxbio.tech` issuer, audience, token endpoint, and resolve endpoint. Existing callers using the Signet issuer must pass explicit overrides.

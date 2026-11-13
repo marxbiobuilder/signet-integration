@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0
+
+- Release the Payload 3.93.0 plugin as stable with Directory-managed identity bindings, native-session OIDC login/revocation, scoped MCP and opt-in REST/Sync admission.
+- Include the beta.9 explicit binding intent and project-policy eligibility behavior. The removed xignetEnabled gate is not restored; existing consumers must apply the documented schema migration and rollout procedure.
+- Resolve published dependencies to stable @xignet/core 0.1.0 and @xignet/client 0.3.0 ranges.
+- Retain the exact Payload peer baseline, supported Node versions and all operation/scope restrictions.
+
 ## 0.1.0-beta.9
 
 - Remove the managed `xignetEnabled` field and authorization gate. Directory-bound users are admitted according to the project eligibility policy; user deletion revokes existing SSO sessions.
