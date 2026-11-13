@@ -1,6 +1,6 @@
 'use client';
 
-import { createElement, useState } from 'react';
+import { createElement, useRef, useState } from 'react';
 import { useConfig, useField } from '@payloadcms/ui';
 import { directoryMessages } from './directory-messages.js';
 
@@ -15,12 +15,17 @@ export function XignetDirectoryField({
   const { config } = useConfig();
   const email = useField<string>({ path: 'email' });
   const confirmation = useField<string>({ path });
+  const issuer = useField<string>({ path: 'xignetIssuer' });
+  const subject = useField<string>({ path: 'xignetSubject' });
   const [preview, setPreview] = useState<{ email: string; sub: string }>();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const current =
     typeof email.value === 'string' ? email.value.trim().toLowerCase() : '';
+  const currentEmail = useRef(current);
+  currentEmail.current = current;
   async function lookup() {
+    const requestedEmail = current;
     setBusy(true);
     setMessage('');
     setPreview(undefined);
@@ -32,7 +37,7 @@ export function XignetDirectoryField({
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ email: current }),
+          body: JSON.stringify({ email: requestedEmail }),
         },
       );
       if (!response.ok) {
@@ -52,10 +57,16 @@ export function XignetDirectoryField({
         return;
       }
       const result = (await response.json()) as {
-        identity: { email: string; sub: string };
+        identity: { issuer: string; email: string; sub: string };
         confirmation: string;
       };
+      if (currentEmail.current !== requestedEmail) {
+        setMessage('Email 已變更，請重新查詢 Xignet 身分。');
+        return;
+      }
       setPreview(result.identity);
+      issuer.setValue(result.identity.issuer);
+      subject.setValue(result.identity.sub);
       confirmation.setValue(result.confirmation);
     } catch {
       setMessage('身分查詢暫時無法使用，請稍後再試。');

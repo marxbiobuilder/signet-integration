@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.7
+
+- Show Directory lookup results in the managed issuer and subject fields before an admin saves a user.
+- Ignore a lookup response if the email changed while the request was in progress, and clarify the missing identity or CMS grant message.
+
 ## 0.1.0-beta.6
 
 - Render the Admin sign-in action with Xignet's official 40 px planet button and locale-specific text.
