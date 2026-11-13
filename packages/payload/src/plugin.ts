@@ -26,7 +26,10 @@ export type XignetPluginOptions<TUser extends TypedUser = TypedUser> = Omit<
   readonly users: ManagedUsersOptions<TUser>;
   /** Server-only directory client. Omit to disable account provisioning. */
   readonly directory?: DirectoryClient;
-  readonly admin?: { readonly loginPath?: string; readonly label?: string };
+  readonly admin?: {
+    readonly loginPath?: string;
+    readonly label?: string | Readonly<Record<string, string>>;
+  };
 };
 export type XignetPlugin = Plugin & XignetPayloadIntegration;
 
@@ -35,7 +38,10 @@ export function xignetPlugin<TUser extends TypedUser>(
   input: XignetPluginOptions<TUser>,
 ): XignetPlugin {
   const userCollection = input.userCollection;
-  const loginLabel = input.admin?.label ?? 'Sign in with Xignet';
+  const loginLabel = input.admin?.label ?? {
+    en: 'Sign in with Xignet',
+    zh: '使用火星護照登入',
+  };
   const provider = Object.freeze({ ...(input.provider ?? XIGNET_PROVIDER) });
   const managed = createManagedUsers({
     ...provider,

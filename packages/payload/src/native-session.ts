@@ -421,6 +421,15 @@ export function createNativeSessions<TUser extends TypedUser>(
     };
     return {
       ...config,
+      ...(xignetOnly
+        ? {
+            access: {
+              ...config.access,
+              // Local password lockouts do not apply to Xignet-only accounts.
+              unlock: () => false,
+            },
+          }
+        : {}),
       auth: {
         ...auth,
         ...(xignetOnly

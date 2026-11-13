@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.6
+
+- Render the Admin sign-in action with Xignet's official 40 px planet button and locale-specific text.
+- Deny Payload's password unlock operation for Xignet-only users so the obsolete Force Unlock control is not shown.
+
 ## 0.1.0-beta.5
 
 - Allow a password-era Payload user to be bound to Xignet when an update carries the user's unchanged legacy hash and salt. Continue rejecting all new password, hash and salt values.

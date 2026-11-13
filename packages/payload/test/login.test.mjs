@@ -793,6 +793,7 @@ test('Xignet-only users have no password and use the supported custom session st
   assert.deepEqual(collection.config.auth.disableLocalStrategy, {
     enableFields: true,
   });
+  assert.equal(await collection.config.access.unlock(), false);
   const stored = await f.payload.db.findOne({
     collection: 'users',
     where: { id: { equals: f.user.id } },
