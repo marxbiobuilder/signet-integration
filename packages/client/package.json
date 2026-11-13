@@ -1,6 +1,6 @@
 {
   "name": "@xignet/client",
-  "version": "0.2.1",
+  "version": "0.3.0-beta.1",
   "description": "Signet machine-to-machine OAuth client with safe errors, token caching and client_secret_basic authentication.",
   "license": "MIT",
   "repository": {
@@ -15,6 +15,10 @@
     ".": {
       "types": "./dist/index.d.cts",
       "default": "./dist/index.cjs"
+    },
+    "./directory": {
+      "types": "./dist/directory.d.cts",
+      "default": "./dist/directory.cjs"
     }
   },
   "files": [

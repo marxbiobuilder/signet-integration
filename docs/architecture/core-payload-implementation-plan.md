@@ -246,3 +246,10 @@ mutationPolicy 接收操作、原文件、輸入資料與草稿模式，回傳�
 - [Payload v3.93 MCP overrideAuth](https://github.com/payloadcms/payload/blob/v3.93.0/packages/plugin-mcp/src/endpoints/resolveAccessSettings.ts)
 - [Payload v3.93 MCP types](https://github.com/payloadcms/payload/blob/v3.93.0/packages/plugin-mcp/src/types.ts)
 - [Payload custom strategies](https://payloadcms.com/docs/authentication/custom-strategies)
+
+
+## Directory amendment — 2026-11-12
+
+[Xignet #179](https://github.com/marxbiotech/signet-marxbio-tech/issues/179) supersedes manual subject entry for the standard plugin. `@xignet/client/directory` owns server-side Directory HTTP calls and reuses its existing client_credentials token/cache/executor; `@xignet/core` remains protocol verification infrastructure. `@xignet/payload` owns managed identity fields, permission checks, signed preview, save-time revalidation and Xignet-only authentication. The low-level `/v3` adapter retains its custom-resolver/mixed-auth contract.
+
+Admin enters company email, previews the authoritative identity, selects a local role, then saves. First admin uses a trusted Local API seed with Directory lookup and no password. No self-link, invitations, JIT, email auto-link or automatic subject replacement. Missing Directory configuration blocks provisioning. Upstream API deployment and per-CMS service credentials/grants are separate prerequisites; contract fixtures are not real staging acceptance.

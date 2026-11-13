@@ -13,8 +13,10 @@ export {
 } from './bearer.cjs';
 
 export interface SignetClientOptions {
-  /** Defaults to Xignet production. Override for other deployments; HTTPS only. */
+  /** Defaults to Xignet production. Override for other deployments; HTTPS by default. */
   tokenUrl?: string;
+  /** Explicitly permit HTTP only for loopback development fixtures. */
+  allowInsecureLoopback?: boolean;
   clientId: string;
   clientSecret: string;
   /** Signet/Hydra expects audience in the form body, not resource or query. */
@@ -74,7 +76,12 @@ export class SignetClient {
       throw invalid();
     }
     if (
-      url.protocol !== 'https:' ||
+      (url.protocol !== 'https:' &&
+        !(
+          options.allowInsecureLoopback === true &&
+          url.protocol === 'http:' &&
+          ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+        )) ||
       url.username ||
       url.password ||
       url.search ||
@@ -134,6 +141,11 @@ export class SignetClient {
         { token_endpoint_auth_method: 'client_secret_basic' },
         oidc.ClientSecretBasic(options.clientSecret),
       );
+      if (
+        options.allowInsecureLoopback &&
+        new URL(options.tokenUrl).protocol === 'http:'
+      )
+        oidc.allowInsecureRequests(config);
       // The protocol library uses redirect:error. Preserve it to avoid forwarding
       // credentials to redirected endpoints; share a deadline across transport.
       const signal = AbortSignal.timeout(options.timeoutMs!);

@@ -13,15 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 9.1.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -41,9 +41,36 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Check core package contents
+        working-directory: packages/core
+        run: npm pack --dry-run
+
+      - name: Check Payload adapter package contents
+        working-directory: packages/payload
+        run: npm pack --dry-run
+
       - name: Show what a publish of @xignet/nest would ship
         working-directory: packages/nest
         run: npm pack --dry-run
+
+  core-payload:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22.23.4', '24', '26.13.1']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9.1.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @xignet/core test
+      - run: pnpm --filter @xignet/client build
+      - run: pnpm --filter @xignet/payload test
 
   client:
     runs-on: ubuntu-latest
@@ -51,11 +78,11 @@ jobs:
       matrix:
         node: ['22.22.0', '24']
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
         with:
           version: 9.1.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
