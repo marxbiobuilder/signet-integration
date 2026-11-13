@@ -1335,3 +1335,54 @@ test('unrelated updates to unbound users do not need Directory or bind implicitl
   assert.equal(bound.xignetSubject, 'one');
   assert.equal((await f.signedIn()).response.status, 303);
 });
+
+test('session policy denial revokes the SID even when a database write bypasses hooks', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const signed = await f.signedIn();
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user.id,
+    f.user.id,
+  );
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'suspended' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
+  );
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'admin' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
+  );
+});
+
+test('an administrator binds an existing unbound user with a fresh Directory preview', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const signed = await f.signedIn();
+  const req = await f.authenticatedReq(signed.cookie);
+  req.payloadAPI = 'REST';
+  const legacy = await f.payload.db.create({
+    collection: 'users',
+    data: { email: 'editor@example.test', role: 'editor' },
+  });
+  const lookup = await preview(f, req, legacy.email);
+  const bound = await f.payload.update({
+    collection: 'users',
+    id: legacy.id,
+    req,
+    data: { xignetDirectoryConfirmation: lookup.confirmation },
+  });
+  assert.equal(bound.xignetIssuer, f.issuer);
+  assert.equal(bound.xignetSubject, 'two');
+  assert.equal((await f.complete(await f.begin('two'))).response.status, 303);
+});
