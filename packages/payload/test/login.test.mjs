@@ -876,7 +876,6 @@ test('password-era admin can bind through Directory without reusing local creden
     data: {
       xignetIssuer: null,
       xignetSubject: null,
-      xignetEnabled: false,
       hash: 'legacy-hash-fixture',
       salt: 'legacy-salt-fixture',
     },
@@ -885,11 +884,12 @@ test('password-era admin can bind through Directory without reusing local creden
     collection: 'users',
     id: f.user.id,
     overrideAccess: true,
-    data: { xignetEnabled: true },
+    data: { email: f.user.email },
   });
   assert.equal(bound.xignetIssuer, f.issuer);
   assert.equal(bound.xignetSubject, 'one');
-  assert.equal(bound.xignetEnabled, true);
+  assert.equal(bound.xignetEnabled, undefined);
+  assert.equal((await f.signedIn()).response.status, 303);
   const stored = await f.payload.db.findOne({
     collection: 'users',
     where: { id: { equals: f.user.id } },
@@ -1226,4 +1226,64 @@ test('Directory preview rejects invalid origin, tampering, expiry and another ac
   });
   assert.equal(updated.xignetSubject, 'two');
   assert.equal((await f.payload.count({ collection: 'users' })).totalDocs, 2);
+});
+
+test('managed users can sign in after creation and deletion revokes their sessions permanently', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  assert.equal(
+    f.payload.collections.users.config.fields.some(
+      (field) => field.name === 'xignetEnabled',
+    ),
+    false,
+  );
+  const first = await f.signedIn();
+  assert.equal(first.response.status, 303);
+  await f.payload.delete({ collection: 'users', id: f.user.id });
+  assert.equal(
+    (await f.payload.count({ collection: 'xignet-sessions' })).totalDocs,
+    0,
+  );
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(first.cookie).headers }))
+      .user,
+    null,
+  );
+  assert.equal((await f.complete(await f.begin())).response.status, 403);
+  const replacement = await f.payload.create({
+    collection: 'users',
+    data: { email: f.user.email, role: 'admin' },
+  });
+  assert.equal(replacement.xignetSubject, 'one');
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(first.cookie).headers }))
+      .user,
+    null,
+  );
+  assert.equal((await f.signedIn()).response.status, 303);
+});
+
+test('project eligibility policy remains authoritative and role changes revoke sessions', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const first = await f.signedIn();
+  await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'suspended' },
+  });
+  assert.equal(
+    (await f.payload.count({ collection: 'xignet-sessions' })).totalDocs,
+    0,
+  );
+  assert.equal((await f.complete(await f.begin())).response.status, 403);
+  await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'admin' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(first.cookie).headers }))
+      .user,
+    null,
+  );
+  assert.equal((await f.signedIn()).response.status, 303);
 });

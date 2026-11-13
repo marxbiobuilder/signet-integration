@@ -48,7 +48,6 @@ export function createManagedUsers<TUser extends TypedUser>({
       'email',
       'xignetIssuer',
       'xignetSubject',
-      'xignetEnabled',
       ...(policy.revokeOnFields ?? []),
     ]),
   ];
@@ -76,7 +75,6 @@ export function createManagedUsers<TUser extends TypedUser>({
     if (found.docs.length !== 1)
       return { status: 'denied', reason: 'not_allowed' };
     const user = found.docs[0] as unknown as TUser & {
-      xignetEnabled?: boolean;
       email?: string;
     };
     if (
@@ -86,7 +84,6 @@ export function createManagedUsers<TUser extends TypedUser>({
         canonicalEmail(login.idTokenClaims.email) !== user.email)
     )
       return { status: 'denied', reason: 'not_allowed' };
-    if (!user.xignetEnabled) return { status: 'denied', reason: 'disabled' };
     if (!(await policy.allowUser(user)))
       return { status: 'denied', reason: 'not_allowed' };
     return { status: 'allowed', user: { ...user, collection: userCollection } };
@@ -96,7 +93,6 @@ export function createManagedUsers<TUser extends TypedUser>({
     const reserved = [
       'xignetIssuer',
       'xignetSubject',
-      'xignetEnabled',
       'xignetDirectoryConfirmation',
     ];
     if (
@@ -155,13 +151,6 @@ export function createManagedUsers<TUser extends TypedUser>({
           },
           access: { read: access, create: access, update: access },
         },
-        {
-          name: 'xignetEnabled',
-          type: 'checkbox',
-          defaultValue: true,
-          label: 'Enable Xignet access',
-          access: { read: access, create: access, update: access },
-        },
       ],
       hooks: {
         ...config.hooks,
@@ -194,7 +183,8 @@ export function createManagedUsers<TUser extends TypedUser>({
             const needsLookup =
               operation === 'create' ||
               email !== originalDoc?.email ||
-              (data.xignetEnabled === true && !originalDoc?.xignetEnabled) ||
+              !originalDoc?.xignetIssuer ||
+              !originalDoc?.xignetSubject ||
               Boolean(data.xignetDirectoryConfirmation);
             if (needsLookup) {
               const identity = await bindings.verify(
