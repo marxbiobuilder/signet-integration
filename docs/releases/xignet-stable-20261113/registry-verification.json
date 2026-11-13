@@ -1,0 +1,133 @@
+{
+  "registry": [
+    {
+      "package": "@xignet/core",
+      "version": "0.1.0",
+      "latest": "0.1.0",
+      "sourceCommit": "9c29a1b8e5bb842d1bbac615698cafa7d8686fd5",
+      "workflow": {
+        "ref": "refs/tags/core-v0.1.0",
+        "repository": "https://github.com/marxbiobuilder/signet-integration",
+        "path": ".github/workflows/core-publish.yml"
+      },
+      "tarballIntegrityMatches": true,
+      "distIdenticalToTestedCandidate": true,
+      "distFileCount": 18,
+      "provenanceSubjectDigestMatches": true,
+      "provenanceInvocation": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43427161605/attempts/1",
+      "attestationsUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@xignet%2fcore@0.1.0",
+      "dependencies": {
+        "jose": "^5.10.0"
+      },
+      "peerDependencies": {},
+      "engines": {
+        "node": ">=22.22.0"
+      }
+    },
+    {
+      "package": "@xignet/client",
+      "version": "0.3.0",
+      "latest": "0.3.0",
+      "sourceCommit": "9c29a1b8e5bb842d1bbac615698cafa7d8686fd5",
+      "workflow": {
+        "ref": "refs/tags/client-v0.3.0",
+        "repository": "https://github.com/marxbiobuilder/signet-integration",
+        "path": ".github/workflows/client-publish.yml"
+      },
+      "tarballIntegrityMatches": true,
+      "distIdenticalToTestedCandidate": true,
+      "distFileCount": 6,
+      "provenanceSubjectDigestMatches": true,
+      "provenanceInvocation": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43427542291/attempts/1",
+      "attestationsUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@xignet%2fclient@0.3.0",
+      "dependencies": {
+        "openid-client": "^6.8.9"
+      },
+      "peerDependencies": {},
+      "engines": {
+        "node": ">=22.22.0"
+      }
+    },
+    {
+      "package": "@xignet/payload",
+      "version": "0.1.1",
+      "latest": "0.1.1",
+      "sourceCommit": "02f81eef55dad7671abe77961338c5462fe219a4",
+      "workflow": {
+        "ref": "refs/tags/payload-v0.1.1",
+        "repository": "https://github.com/marxbiobuilder/signet-integration",
+        "path": ".github/workflows/payload-publish.yml"
+      },
+      "tarballIntegrityMatches": true,
+      "distIdenticalToTestedCandidate": true,
+      "distFileCount": 26,
+      "provenanceSubjectDigestMatches": true,
+      "provenanceInvocation": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43430038893/attempts/1",
+      "attestationsUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@xignet%2fpayload@0.1.1",
+      "dependencies": {
+        "jose": "^5.10.0",
+        "@xignet/core": "^0.1.0",
+        "@xignet/client": "^0.3.0"
+      },
+      "peerDependencies": {
+        "react": "^19.0.0",
+        "payload": "3.93.0",
+        "typescript": ">=5.7.3 <6",
+        "@payloadcms/ui": "3.93.0",
+        "@payloadcms/plugin-mcp": "3.93.0"
+      },
+      "engines": {
+        "node": "^22.23.4 || >=24.22.1"
+      }
+    }
+  ],
+  "consumerVersions": {
+    "@xignet/client": [
+      "0.3.0"
+    ],
+    "@xignet/core": [
+      "0.1.0"
+    ],
+    "@xignet/payload": [
+      "0.1.1"
+    ]
+  },
+  "consumerTypeScriptVersions": [
+    "5.9.3"
+  ],
+  "consumerSmoke": {
+    "node": "v26.13.1",
+    "core": [
+      "JwtRejectionEnum",
+      "JwtVerifier",
+      "REMOTE_JWKS_OPTIONS",
+      "__esModule",
+      "createScopeVocabulary",
+      "createTokenVerifier",
+      "default",
+      "hasAllScopes",
+      "module.exports",
+      "trustedUrl"
+    ],
+    "client": [
+      "SignetClient",
+      "SignetOAuthError",
+      "SignetRequestError",
+      "__esModule",
+      "createFetchOperation",
+      "default",
+      "executeWithBearer",
+      "module.exports"
+    ],
+    "payloadPlugin": "function",
+    "nextHelpers": [
+      "createXignetRouteHandlers"
+    ],
+    "esm": true,
+    "cjs": true,
+    "directory": true
+  },
+  "npmRegistryOnly": true,
+  "manualHostTypeScriptDependency": false,
+  "nestAlreadyStable": "0.4.0"
+}

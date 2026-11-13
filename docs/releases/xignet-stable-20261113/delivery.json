@@ -1,0 +1,42 @@
+{
+  "status": "published-and-verified",
+  "sdkPR": "https://github.com/marxbiobuilder/signet-integration/pull/26",
+  "baseline": "payload beta.9 / 9c203e1ccf9a2e84bc308b5031b7c9e2caa0524c",
+  "branch": "codex/xignet-stable-release-20261113",
+  "packages": [
+    {
+      "name": "@xignet/core",
+      "version": "0.1.0",
+      "source": "9c29a1b8e5bb842d1bbac615698cafa7d8686fd5",
+      "workflow": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43427161605",
+      "release": "https://github.com/marxbiobuilder/signet-integration/releases/tag/core-v0.1.0"
+    },
+    {
+      "name": "@xignet/client",
+      "version": "0.3.0",
+      "source": "9c29a1b8e5bb842d1bbac615698cafa7d8686fd5",
+      "workflow": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43427542291",
+      "release": "https://github.com/marxbiobuilder/signet-integration/releases/tag/client-v0.3.0"
+    },
+    {
+      "name": "@xignet/payload",
+      "version": "0.1.1",
+      "source": "02f81eef55dad7671abe77961338c5462fe219a4",
+      "workflow": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43430038893",
+      "release": "https://github.com/marxbiobuilder/signet-integration/releases/tag/payload-v0.1.1"
+    }
+  ],
+  "releaseCI": "https://github.com/marxbiobuilder/signet-integration/actions/runs/43429770529",
+  "sdkTests": 450,
+  "packedConsumerGate": true,
+  "registryConsumerSmoke": true,
+  "latestTagsVerified": true,
+  "stablePayloadDependencies": true,
+  "provenanceSourceAndDigestMatched": true,
+  "initialPayloadCorrection": "0.1.0 omitted the TypeScript runtime peer; 0.1.1 adds it and a prepublication regression gate. 0.1.0 release notes point to 0.1.1.",
+  "nestAlreadyStable": "0.4.0",
+  "consumerWebsitePR": "https://github.com/marxbiotech/www-marxbiotech-com/pull/26",
+  "websiteDeploymentPerformed": false,
+  "mainMerged": false,
+  "outstandingSDKReleaseBlockers": []
+}
