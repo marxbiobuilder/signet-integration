@@ -96,7 +96,7 @@ export function XignetDirectoryField({
       : createElement(
           'p',
           null,
-          '新增用戶或變更 email 時，請先查詢並確認公司身分。',
+          '新增用戶、綁定既有帳號或變更 email 時，請先查詢並確認公司身分。',
         ),
     message ? createElement('p', { role: 'alert' }, message) : null,
   );

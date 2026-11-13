@@ -876,7 +876,6 @@ test('password-era admin can bind through Directory without reusing local creden
     data: {
       xignetIssuer: null,
       xignetSubject: null,
-      xignetEnabled: false,
       hash: 'legacy-hash-fixture',
       salt: 'legacy-salt-fixture',
     },
@@ -885,11 +884,13 @@ test('password-era admin can bind through Directory without reusing local creden
     collection: 'users',
     id: f.user.id,
     overrideAccess: true,
-    data: { xignetEnabled: true },
+    data: { email: f.user.email },
+    context: { xignetBindIdentity: true },
   });
   assert.equal(bound.xignetIssuer, f.issuer);
   assert.equal(bound.xignetSubject, 'one');
-  assert.equal(bound.xignetEnabled, true);
+  assert.equal(bound.xignetEnabled, undefined);
+  assert.equal((await f.signedIn()).response.status, 303);
   const stored = await f.payload.db.findOne({
     collection: 'users',
     where: { id: { equals: f.user.id } },
@@ -1226,4 +1227,162 @@ test('Directory preview rejects invalid origin, tampering, expiry and another ac
   });
   assert.equal(updated.xignetSubject, 'two');
   assert.equal((await f.payload.count({ collection: 'users' })).totalDocs, 2);
+});
+
+test('managed users can sign in after creation and deletion revokes their sessions permanently', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  assert.equal(
+    f.payload.collections.users.config.fields.some(
+      (field) => field.name === 'xignetEnabled',
+    ),
+    false,
+  );
+  const first = await f.signedIn();
+  assert.equal(first.response.status, 303);
+  await f.payload.delete({ collection: 'users', id: f.user.id });
+  assert.equal(
+    (await f.payload.count({ collection: 'xignet-sessions' })).totalDocs,
+    0,
+  );
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(first.cookie).headers }))
+      .user,
+    null,
+  );
+  assert.equal((await f.complete(await f.begin())).response.status, 403);
+  const replacement = await f.payload.create({
+    collection: 'users',
+    data: { email: f.user.email, role: 'admin' },
+  });
+  assert.equal(replacement.xignetSubject, 'one');
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(first.cookie).headers }))
+      .user,
+    null,
+  );
+  assert.equal((await f.signedIn()).response.status, 303);
+});
+
+test('project eligibility policy remains authoritative and role changes revoke sessions', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const first = await f.signedIn();
+  await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'suspended' },
+  });
+  assert.equal(
+    (await f.payload.count({ collection: 'xignet-sessions' })).totalDocs,
+    0,
+  );
+  assert.equal((await f.complete(await f.begin())).response.status, 403);
+  await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'admin' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(first.cookie).headers }))
+      .user,
+    null,
+  );
+  assert.equal((await f.signedIn()).response.status, 303);
+});
+
+test('unrelated updates to unbound users do not need Directory or bind implicitly', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { xignetIssuer: null, xignetSubject: null },
+  });
+  f.directoryPeople.clear();
+  const updated = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'editor' },
+  });
+  assert.equal(updated.xignetSubject, null);
+  assert.equal(updated.role, 'editor');
+  const req = await createLocalReq(
+    { user: { ...updated, collection: 'users', role: 'admin' } },
+    f.payload,
+  );
+  req.payloadAPI = 'REST';
+  const interactive = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    req,
+    data: { email: f.user.email, role: 'editor' },
+  });
+  assert.equal(interactive.xignetSubject, null);
+  await assert.rejects(
+    f.payload.update({
+      collection: 'users',
+      id: f.user.id,
+      data: { email: f.user.email },
+      context: { xignetBindIdentity: true },
+    }),
+  );
+  assert.equal((await f.complete(await f.begin())).response.status, 403);
+  f.directoryPeople.set(f.user.email, 'one');
+  const bound = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { email: f.user.email },
+    context: { xignetBindIdentity: true },
+  });
+  assert.equal(bound.xignetSubject, 'one');
+  assert.equal((await f.signedIn()).response.status, 303);
+});
+
+test('session policy denial revokes the SID even when a database write bypasses hooks', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const signed = await f.signedIn();
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user.id,
+    f.user.id,
+  );
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'suspended' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
+  );
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'admin' },
+  });
+  assert.equal(
+    (await f.payload.auth({ headers: f.requestFor(signed.cookie).headers }))
+      .user,
+    null,
+  );
+});
+
+test('an administrator binds an existing unbound user with a fresh Directory preview', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  const signed = await f.signedIn();
+  const req = await f.authenticatedReq(signed.cookie);
+  req.payloadAPI = 'REST';
+  const legacy = await f.payload.db.create({
+    collection: 'users',
+    data: { email: 'editor@example.test', role: 'editor' },
+  });
+  const lookup = await preview(f, req, legacy.email);
+  const bound = await f.payload.update({
+    collection: 'users',
+    id: legacy.id,
+    req,
+    data: { xignetDirectoryConfirmation: lookup.confirmation },
+  });
+  assert.equal(bound.xignetIssuer, f.issuer);
+  assert.equal(bound.xignetSubject, 'two');
+  assert.equal((await f.complete(await f.begin('two'))).response.status, 303);
 });
