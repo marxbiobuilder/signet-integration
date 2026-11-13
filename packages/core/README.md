@@ -1,6 +1,6 @@
 # @xignet/core
 
-Framework-independent Xignet verification and authorization code + PKCE login for Node.js 22.22+ and 24. This is a prerelease; the Payload adapter and website integration are separate work tracked in [the implementation plan](../../docs/architecture/core-payload-implementation-plan.md).
+Framework-independent Xignet verification and authorization code + PKCE login for Node.js 22.22+ and 24. The Payload adapter and website integration are tracked in [the implementation plan](../../docs/architecture/core-payload-implementation-plan.md).
 
 ```ts
 import { createTokenVerifier, hasAllScopes } from '@xignet/core';

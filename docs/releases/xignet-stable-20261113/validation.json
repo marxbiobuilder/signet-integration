@@ -1,0 +1,38 @@
+{
+  "sourceBeta9": "9c203e1ccf9a2e84bc308b5031b7c9e2caa0524c",
+  "runtime": "Node 26.13.1",
+  "pnpm": "9.1.1",
+  "checks": {
+    "frozenInstall": true,
+    "lint": true,
+    "clientFormat": true,
+    "typecheck": true,
+    "build": true,
+    "coreTests": 13,
+    "clientTests": 105,
+    "payloadTests": 51,
+    "nestTests": 281,
+    "totalTests": 450,
+    "failed": 0,
+    "distByteEquivalence": [
+      "core@0.1.0-beta.1",
+      "client@0.3.0-beta.1",
+      "payload@0.1.0-beta.9"
+    ],
+    "stablePayloadDependencies": {
+      "@xignet/core": "^0.1.0",
+      "@xignet/client": "^0.3.0"
+    }
+  },
+  "websiteEvidence": {
+    "beta9ConsumerPR": "https://github.com/marxbiotech/www-marxbiotech-com/pull/26",
+    "reportedChecks": [
+      "Postgres baseline",
+      "22 Xignet integration tests",
+      "production CMS build",
+      "TypeScript"
+    ],
+    "independentlyRerunInThisReleaseTask": false
+  },
+  "scope": "Promote core/client/payload; Nest remains on published stable 0.4.0; device adapter PR13 excluded."
+}

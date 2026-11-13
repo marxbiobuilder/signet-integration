@@ -1,0 +1,21 @@
+{
+  "issue": "Payload MCP 3.93.0 imports TypeScript at runtime but does not declare it",
+  "initialPublishedPayload": "0.1.0",
+  "fixPayload": "0.1.1",
+  "metadataFix": {
+    "requiredPeer": "typescript >=5.7.3 <6"
+  },
+  "runtimeSourceChanged": false,
+  "regressionRedWithoutPeer": true,
+  "regressionGreenWithPeer": true,
+  "isolatedPackedConsumer": [
+    "CJS core/client",
+    "ESM core/client",
+    "Directory",
+    "Payload plugin",
+    "Next handlers"
+  ],
+  "hostTypeScriptExplicitlyInstalledInFixture": false,
+  "ciGate": "pnpm test:packed",
+  "publishGate": "pnpm test:packed before payload publish"
+}

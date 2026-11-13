@@ -89,6 +89,9 @@ jobs:
       - name: Build
         run: pnpm --filter @xignet/payload... build
 
+      - name: Verify packed SDK consumer
+        run: pnpm test:packed
+
       - name: Pack with resolved workspace dependencies
         working-directory: packages/payload
         run: pnpm pack --pack-destination "$RUNNER_TEMP"

@@ -1,0 +1,190 @@
+[
+  {
+    "name": "xignet-stable-registry-smoke",
+    "version": "0.0.0",
+    "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final",
+    "private": false,
+    "dependencies": {
+      "@xignet/client": {
+        "from": "@xignet/client",
+        "version": "0.3.0",
+        "resolved": "https://registry.npmjs.org/@xignet/client/-/client-0.3.0.tgz",
+        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@xignet+client@0.3.0/node_modules/@xignet/client"
+      },
+      "@xignet/core": {
+        "from": "@xignet/core",
+        "version": "0.1.0",
+        "resolved": "https://registry.npmjs.org/@xignet/core/-/core-0.1.0.tgz",
+        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@xignet+core@0.1.0/node_modules/@xignet/core"
+      },
+      "@payloadcms/plugin-mcp": {
+        "from": "@payloadcms/plugin-mcp",
+        "version": "3.93.0",
+        "resolved": "https://registry.npmjs.org/@payloadcms/plugin-mcp/-/plugin-mcp-3.93.0.tgz",
+        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@payloadcms+plugin-mcp@3.93.0_next@16.4.6_react-dom@19.2.4_react@19.2.4__react@19.2.4__payloa_wvhygi7ojigsyuduaijy7xjqfy/node_modules/@payloadcms/plugin-mcp",
+        "dependencies": {
+          "payload": {
+            "from": "payload",
+            "version": "3.93.0",
+            "resolved": "https://registry.npmjs.org/payload/-/payload-3.93.0.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/payload@3.93.0_graphql@16.15.0_typescript@5.9.3/node_modules/payload",
+            "dependencies": {
+              "ts-essentials": {
+                "from": "ts-essentials",
+                "version": "10.0.3",
+                "resolved": "https://registry.npmjs.org/ts-essentials/-/ts-essentials-10.0.3.tgz",
+                "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/ts-essentials@10.0.3_typescript@5.9.3/node_modules/ts-essentials",
+                "dependencies": {
+                  "typescript": {
+                    "from": "typescript",
+                    "version": "5.9.3",
+                    "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+                    "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/typescript@5.9.3/node_modules/typescript"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "@payloadcms/ui": {
+        "from": "@payloadcms/ui",
+        "version": "3.93.0",
+        "resolved": "https://registry.npmjs.org/@payloadcms/ui/-/ui-3.93.0.tgz",
+        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@payloadcms+ui@3.93.0_@types+react@19.3.0_monaco-editor@0.57.0_next@16.4.6_react-dom@19.2.4_r_kvcxrjo43gd2fe3pbudjmelraa/node_modules/@payloadcms/ui",
+        "dependencies": {
+          "ts-essentials": {
+            "from": "ts-essentials",
+            "version": "10.0.3",
+            "resolved": "https://registry.npmjs.org/ts-essentials/-/ts-essentials-10.0.3.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/ts-essentials@10.0.3_typescript@5.9.3/node_modules/ts-essentials",
+            "dependencies": {
+              "typescript": {
+                "from": "typescript",
+                "version": "5.9.3",
+                "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+                "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/typescript@5.9.3/node_modules/typescript"
+              }
+            }
+          },
+          "payload": {
+            "from": "payload",
+            "version": "3.93.0",
+            "resolved": "https://registry.npmjs.org/payload/-/payload-3.93.0.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/payload@3.93.0_graphql@16.15.0_typescript@5.9.3/node_modules/payload",
+            "dependencies": {
+              "ts-essentials": {
+                "from": "ts-essentials",
+                "version": "10.0.3",
+                "resolved": "https://registry.npmjs.org/ts-essentials/-/ts-essentials-10.0.3.tgz",
+                "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/ts-essentials@10.0.3_typescript@5.9.3/node_modules/ts-essentials",
+                "dependencies": {
+                  "typescript": {
+                    "from": "typescript",
+                    "version": "5.9.3",
+                    "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+                    "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/typescript@5.9.3/node_modules/typescript"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "@xignet/payload": {
+        "from": "@xignet/payload",
+        "version": "0.1.1",
+        "resolved": "https://registry.npmjs.org/@xignet/payload/-/payload-0.1.1.tgz",
+        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@xignet+payload@0.1.1_@payloadcms+plugin-mcp@3.93.0_next@16.4.6_react-dom@19.2.4_react@19.2.4_xivrvxn3jthpdz2ul2ndlrwvne/node_modules/@xignet/payload",
+        "dependencies": {
+          "@xignet/client": {
+            "from": "@xignet/client",
+            "version": "0.3.0",
+            "resolved": "https://registry.npmjs.org/@xignet/client/-/client-0.3.0.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@xignet+client@0.3.0/node_modules/@xignet/client"
+          },
+          "@xignet/core": {
+            "from": "@xignet/core",
+            "version": "0.1.0",
+            "resolved": "https://registry.npmjs.org/@xignet/core/-/core-0.1.0.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@xignet+core@0.1.0/node_modules/@xignet/core"
+          },
+          "@payloadcms/plugin-mcp": {
+            "from": "@payloadcms/plugin-mcp",
+            "version": "3.93.0",
+            "resolved": "https://registry.npmjs.org/@payloadcms/plugin-mcp/-/plugin-mcp-3.93.0.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@payloadcms+plugin-mcp@3.93.0_next@16.4.6_react-dom@19.2.4_react@19.2.4__react@19.2.4__payloa_wvhygi7ojigsyuduaijy7xjqfy/node_modules/@payloadcms/plugin-mcp",
+            "dependencies": {
+              "payload": {
+                "from": "payload",
+                "version": "3.93.0",
+                "resolved": "https://registry.npmjs.org/payload/-/payload-3.93.0.tgz",
+                "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/payload@3.93.0_graphql@16.15.0_typescript@5.9.3/node_modules/payload",
+                "dependencies": {
+                  "ts-essentials": {
+                    "from": "ts-essentials",
+                    "version": "10.0.3",
+                    "resolved": "https://registry.npmjs.org/ts-essentials/-/ts-essentials-10.0.3.tgz",
+                    "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/ts-essentials@10.0.3_typescript@5.9.3/node_modules/ts-essentials",
+                    "dependencies": {
+                      "typescript": {
+                        "from": "typescript",
+                        "version": "5.9.3",
+                        "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+                        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/typescript@5.9.3/node_modules/typescript"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "@payloadcms/ui": {
+            "from": "@payloadcms/ui",
+            "version": "3.93.0",
+            "resolved": "https://registry.npmjs.org/@payloadcms/ui/-/ui-3.93.0.tgz",
+            "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/@payloadcms+ui@3.93.0_@types+react@19.3.0_monaco-editor@0.57.0_next@16.4.6_react-dom@19.2.4_r_kvcxrjo43gd2fe3pbudjmelraa/node_modules/@payloadcms/ui",
+            "dependencies": {
+              "ts-essentials": {
+                "from": "ts-essentials",
+                "version": "10.0.3",
+                "resolved": "https://registry.npmjs.org/ts-essentials/-/ts-essentials-10.0.3.tgz",
+                "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/ts-essentials@10.0.3_typescript@5.9.3/node_modules/ts-essentials",
+                "dependencies": {
+                  "typescript": {
+                    "from": "typescript",
+                    "version": "5.9.3",
+                    "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+                    "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/typescript@5.9.3/node_modules/typescript"
+                  }
+                }
+              },
+              "payload": {
+                "from": "payload",
+                "version": "3.93.0",
+                "resolved": "https://registry.npmjs.org/payload/-/payload-3.93.0.tgz",
+                "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/payload@3.93.0_graphql@16.15.0_typescript@5.9.3/node_modules/payload",
+                "dependencies": {
+                  "ts-essentials": {
+                    "from": "ts-essentials",
+                    "version": "10.0.3",
+                    "resolved": "https://registry.npmjs.org/ts-essentials/-/ts-essentials-10.0.3.tgz",
+                    "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/ts-essentials@10.0.3_typescript@5.9.3/node_modules/ts-essentials",
+                    "dependencies": {
+                      "typescript": {
+                        "from": "typescript",
+                        "version": "5.9.3",
+                        "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+                        "path": "/private/tmp/xignet-stable-release-20261113/registry-consumer-final/node_modules/.pnpm/typescript@5.9.3/node_modules/typescript"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]
