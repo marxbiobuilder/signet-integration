@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.5
+
+- Allow a password-era Payload user to be bound to Xignet when an update carries the user's unchanged legacy hash and salt. Continue rejecting all new password, hash and salt values.
+
 ## 0.1.0-beta.4
 
 - Point the standard plugin provider preset at the deployed `https://xignet.marxbio.tech` issuer and JWKS. Existing Signet bindings are not migrated automatically; pass an explicit provider for that issuer if still needed.

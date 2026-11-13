@@ -867,6 +867,51 @@ test('Xignet-only users have no password and use the supported custom session st
   );
 });
 
+test('password-era admin can bind through Directory without reusing local credentials', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: {
+      xignetIssuer: null,
+      xignetSubject: null,
+      xignetEnabled: false,
+      hash: 'legacy-hash-fixture',
+      salt: 'legacy-salt-fixture',
+    },
+  });
+  const bound = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    overrideAccess: true,
+    data: { xignetEnabled: true },
+  });
+  assert.equal(bound.xignetIssuer, f.issuer);
+  assert.equal(bound.xignetSubject, 'one');
+  assert.equal(bound.xignetEnabled, true);
+  const stored = await f.payload.db.findOne({
+    collection: 'users',
+    where: { id: { equals: f.user.id } },
+  });
+  assert.equal(stored.hash, 'legacy-hash-fixture');
+  assert.equal(stored.salt, 'legacy-salt-fixture');
+  for (const credentials of [
+    { password: 'new-password' },
+    { hash: 'replacement-hash' },
+    { salt: 'replacement-salt' },
+  ]) {
+    await assert.rejects(
+      f.payload.update({
+        collection: 'users',
+        id: f.user.id,
+        overrideAccess: true,
+        data: credentials,
+      }),
+      /Password credentials are disabled/,
+    );
+  }
+});
+
 test('standard plugin uses the shared provider without per-project issuer settings', async () => {
   assert.deepEqual(XIGNET_PROVIDER, {
     issuer: 'https://xignet.marxbio.tech',

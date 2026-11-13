@@ -444,12 +444,23 @@ export function createNativeSessions<TUser extends TypedUser>(
         beforeValidate: [
           ...(xignetOnly
             ? [
-                ({ data }: { data?: Record<string, unknown> }) => {
+                ({
+                  data,
+                  originalDoc,
+                }: {
+                  data?: Record<string, unknown>;
+                  originalDoc?: Record<string, unknown>;
+                }) => {
+                  // Payload includes an existing auth user's hidden hash/salt
+                  // in update hook data. Preserve those values during a
+                  // password-era account binding, but never accept a new one.
                   if (
                     data &&
-                    ['password', 'hash', 'salt'].some(
-                      (key) => data[key] != null,
-                    )
+                    (data.password != null ||
+                      ['hash', 'salt'].some(
+                        (key) =>
+                          data[key] != null && data[key] !== originalDoc?.[key],
+                      ))
                   )
                     throw new APIError(
                       'Password credentials are disabled for Xignet-only users',
