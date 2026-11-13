@@ -183,8 +183,7 @@ export function createManagedUsers<TUser extends TypedUser>({
             const needsLookup =
               operation === 'create' ||
               email !== originalDoc?.email ||
-              !originalDoc?.xignetIssuer ||
-              !originalDoc?.xignetSubject ||
+              (trusted && req.context.xignetBindIdentity === true) ||
               Boolean(data.xignetDirectoryConfirmation);
             if (needsLookup) {
               const identity = await bindings.verify(

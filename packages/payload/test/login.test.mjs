@@ -885,6 +885,7 @@ test('password-era admin can bind through Directory without reusing local creden
     id: f.user.id,
     overrideAccess: true,
     data: { email: f.user.email },
+    context: { xignetBindIdentity: true },
   });
   assert.equal(bound.xignetIssuer, f.issuer);
   assert.equal(bound.xignetSubject, 'one');
@@ -1285,5 +1286,52 @@ test('project eligibility policy remains authoritative and role changes revoke s
       .user,
     null,
   );
+  assert.equal((await f.signedIn()).response.status, 303);
+});
+
+test('unrelated updates to unbound users do not need Directory or bind implicitly', async (t) => {
+  const f = await fixture(t, false, { managedUsers: true });
+  await f.payload.db.updateOne({
+    collection: 'users',
+    id: f.user.id,
+    data: { xignetIssuer: null, xignetSubject: null },
+  });
+  f.directoryPeople.clear();
+  const updated = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { role: 'editor' },
+  });
+  assert.equal(updated.xignetSubject, null);
+  assert.equal(updated.role, 'editor');
+  const req = await createLocalReq(
+    { user: { ...updated, collection: 'users', role: 'admin' } },
+    f.payload,
+  );
+  req.payloadAPI = 'REST';
+  const interactive = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    req,
+    data: { email: f.user.email, role: 'editor' },
+  });
+  assert.equal(interactive.xignetSubject, null);
+  await assert.rejects(
+    f.payload.update({
+      collection: 'users',
+      id: f.user.id,
+      data: { email: f.user.email },
+      context: { xignetBindIdentity: true },
+    }),
+  );
+  assert.equal((await f.complete(await f.begin())).response.status, 403);
+  f.directoryPeople.set(f.user.email, 'one');
+  const bound = await f.payload.update({
+    collection: 'users',
+    id: f.user.id,
+    data: { email: f.user.email },
+    context: { xignetBindIdentity: true },
+  });
+  assert.equal(bound.xignetSubject, 'one');
   assert.equal((await f.signedIn()).response.status, 303);
 });

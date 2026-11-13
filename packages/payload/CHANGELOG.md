@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.9
+
+- Remove the managed `xignetEnabled` field and authorization gate. Directory-bound users are admitted according to the project eligibility policy; user deletion revokes existing SSO sessions.
+- Bind legacy users through a trusted Local API update with `context.xignetBindIdentity: true` or the existing administrator Directory confirmation flow. Unrelated updates do not trigger a lookup.
+- Consuming projects must remove the obsolete database column and update binding constraints in their own migrations.
+
 ## 0.1.0-beta.8
 
 - Describe Directory `not_found` as an unconfirmed identity, matching the upstream identity-only lookup. Per-person resource grants still govern Xignet portal visibility and OAuth login.
