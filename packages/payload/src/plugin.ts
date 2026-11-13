@@ -11,10 +11,10 @@ import type {
   XignetPayloadOptions,
 } from './types.js';
 
-/** The production AS currently advertises this issuer in discovery and tokens. */
+/** Default issuer advertised by the production Xignet AS. */
 export const XIGNET_PROVIDER = Object.freeze({
-  issuer: 'https://signet.marxbio.tech',
-  jwksUri: 'https://signet.marxbio.tech/.well-known/jwks.json',
+  issuer: 'https://xignet.marxbio.tech',
+  jwksUri: 'https://xignet.marxbio.tech/.well-known/jwks.json',
 });
 
 export type XignetPluginOptions<TUser extends TypedUser = TypedUser> = Omit<

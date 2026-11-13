@@ -6,10 +6,10 @@ import {
 } from './index.cjs';
 
 export const XIGNET_DIRECTORY_DEFAULTS = Object.freeze({
-  issuer: 'https://signet.marxbio.tech',
-  resource: 'https://signet.marxbio.tech/directory',
-  tokenEndpoint: 'https://signet.marxbio.tech/oauth2/token',
-  resolveEndpoint: 'https://signet.marxbio.tech/directory/users/resolve',
+  issuer: 'https://xignet.marxbio.tech',
+  resource: 'https://xignet.marxbio.tech/directory',
+  tokenEndpoint: 'https://xignet.marxbio.tech/oauth2/token',
+  resolveEndpoint: 'https://xignet.marxbio.tech/directory/users/resolve',
 });
 export interface DirectoryIdentity {
   readonly issuer: string;

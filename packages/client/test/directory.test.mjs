@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
-import { createDirectoryClient, canonicalEmail } from '../dist/directory.cjs';
+import {
+  createDirectoryClient,
+  canonicalEmail,
+  XIGNET_DIRECTORY_DEFAULTS,
+} from '../dist/directory.cjs';
 
 async function fixture(t, timeoutMs = 500) {
   const state = {
@@ -158,6 +162,12 @@ test('Directory timeout covers the response body', async (t) => {
 });
 
 test('Directory validates trusted endpoints before sending credentials', () => {
+  assert.deepEqual(XIGNET_DIRECTORY_DEFAULTS, {
+    issuer: 'https://xignet.marxbio.tech',
+    resource: 'https://xignet.marxbio.tech/directory',
+    tokenEndpoint: 'https://xignet.marxbio.tech/oauth2/token',
+    resolveEndpoint: 'https://xignet.marxbio.tech/directory/users/resolve',
+  });
   const base = { clientId: 'service:cms', clientSecret: 'secret' };
   for (const change of [
     { tokenEndpoint: 'https://evil.example/token' },
@@ -165,7 +175,7 @@ test('Directory validates trusted endpoints before sending credentials', () => {
     { issuer: 'http://remote.test', allowInsecureLoopback: true },
     { clientId: 'human' },
     { timeoutMs: 0 },
-    { resolveEndpoint: 'https://signet.marxbio.tech/lookup?q=secret' },
+    { resolveEndpoint: 'https://xignet.marxbio.tech/lookup?q=secret' },
   ])
     assert.throws(() => createDirectoryClient({ ...base, ...change }));
 });

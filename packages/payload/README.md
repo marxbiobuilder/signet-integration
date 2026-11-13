@@ -31,7 +31,7 @@ const xignet = xignetPlugin({
 // The same xignet object works with createXignetRouteHandlers.
 ```
 
-The shared provider currently uses `https://signet.marxbio.tech`, the issuer advertised by the production Xignet AS. Projects do not repeat issuer/JWKS settings. A paired `provider: { issuer, jwksUri }` override supports tests or self-hosted Xignet; user data and request headers cannot select the trusted provider.
+The shared provider uses `https://xignet.marxbio.tech`, the issuer advertised by the production Xignet AS. Projects do not repeat issuer/JWKS settings. A paired `provider: { issuer, jwksUri }` override supports tests or self-hosted Xignet; user data and request headers cannot select the trusted provider. Existing bindings for `https://signet.marxbio.tech` do not migrate automatically.
 
 The plugin owns read-only `xignetIssuer`/`xignetSubject`, `xignetEnabled`, a compound unique identity index, a virtual confirmation field, the Directory lookup endpoint and revocation hooks. An administrator enters a company email, queries Xignet, confirms the identity and chooses a local role. The server resolves the email again on save and checks a five-minute signed preview bound to the acting administrator. A changed result requires a new preview; browser-supplied identity values cannot replace the Directory result. An existing binding cannot transfer to another issuer/subject. Email changes for the same subject, enablement, roles and deletion revoke existing sessions.
 

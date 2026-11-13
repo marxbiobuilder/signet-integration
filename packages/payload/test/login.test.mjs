@@ -868,6 +868,10 @@ test('Xignet-only users have no password and use the supported custom session st
 });
 
 test('standard plugin uses the shared provider without per-project issuer settings', async () => {
+  assert.deepEqual(XIGNET_PROVIDER, {
+    issuer: 'https://xignet.marxbio.tech',
+    jwksUri: 'https://xignet.marxbio.tech/.well-known/jwks.json',
+  });
   const plugin = xignetPlugin({
     resource: 'https://cms.example.test/api/mcp',
     admissionScopes: ['cms:access'],

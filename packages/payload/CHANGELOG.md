@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.4
+
+- Point the standard plugin provider preset at the deployed `https://xignet.marxbio.tech` issuer and JWKS. Existing Signet bindings are not migrated automatically; pass an explicit provider for that issuer if still needed.
+
 ## 0.1.0-beta.3
 
 - Use the CMS `/api/mcp` resource audience for both MCP and opt-in REST access tokens. REST still applies its own admission scopes, route allowlist, operation scopes and local access rules.

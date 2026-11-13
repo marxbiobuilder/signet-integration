@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0-beta.1
+
+- Point Directory defaults at the deployed `https://xignet.marxbio.tech` issuer, audience, token endpoint, and resolve endpoint. Existing callers using the Signet issuer must pass explicit overrides.
+
 ## 0.3.0-beta.0
 
 - Add a server-only Directory email-to-sub lookup client, reusing machine authentication, token caching and bounded resource-401 retry.
