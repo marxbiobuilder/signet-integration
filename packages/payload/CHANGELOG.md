@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.8
+
+- Describe Directory `not_found` as an unconfirmed identity, matching the upstream identity-only lookup. Per-person resource grants still govern Xignet portal visibility and OAuth login.
+
 ## 0.1.0-beta.7
 
 - Show Directory lookup results in the managed issuer and subject fields before an admin saves a user.
