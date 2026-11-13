@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Declare the required TypeScript 5 peer used at runtime by Payload MCP schema conversion, so clean package consumers resolve the compiler without relying on the SDK development workspace.
+- Retain byte-identical runtime code and stable core/client dependencies.
+
 ## 0.1.0
 
 - Release the Payload 3.93.0 plugin as stable with Directory-managed identity bindings, native-session OIDC login/revocation, scoped MCP and opt-in REST/Sync admission.

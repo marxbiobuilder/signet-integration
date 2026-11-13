@@ -17,3 +17,9 @@ Payload requires the exact 3.93.0 peer baseline and Node `^22.23.4 || >=24.22.1`
 Use existing npm OIDC trusted-publisher workflows only; no local npm publish or token is needed. Publish `core-v0.1.0`, verify its registry manifest, then `client-v0.3.0`, verify it, then `payload-v0.1.0`. Verify final `latest` tags, registry dependencies, packaged dist equivalence and provenance. npm artifacts are immutable; do not unpublish or retag old versions to undo a release. A correction requires the next stable version.
 
 No website preview/production deployment, security-setting change, real identity creation, or credential change is part of publishing these packages. Remaining application-specific staged rollout/grant testing is documented in the consumer PR and is distinct from SDK fixture/packaging evidence.
+
+## Clean-consumer correction
+
+The first npm-only consumer exposed a missing runtime peer in Payload MCP3.93.0: `convertCollectionSchemaToZod.js` imports TypeScript, but the MCP package declares no TypeScript dependency. The SDK development workspace supplied it incidentally. Payload0.1.1 explicitly declares required `typescript >=5.7.3 <6`; host React/ReactDOM must also use compatible versions. Adapter runtime source stays unchanged.
+
+The new `pnpm test:packed` creates a consumer outside the monorepo, packs core/client/payload, installs only their archives and the supported Payload/React host stack, then loads CJS/ESM, Directory, Payload and Next entry points. It intentionally does not install TypeScript explicitly. Removing the peer reproduced `ERR_MODULE_NOT_FOUND` for TypeScript; restoring it passed. The gate now runs in CI and before every Payload publication. Payload51 tests, typecheck, lint and both regression directions pass locally. This supersedes the initial0.1.0 packaging result; final npm verification will use0.1.1.

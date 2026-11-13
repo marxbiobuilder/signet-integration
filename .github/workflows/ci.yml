@@ -41,6 +41,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Verify packed SDK consumer
+        run: pnpm test:packed
+
       - name: Check core package contents
         working-directory: packages/core
         run: npm pack --dry-run
