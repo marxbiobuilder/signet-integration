@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.1.2-staging.0] - 2026-11-15
 
 - Adopt Payload's native secondary login button and replace the legacy planet with the official symmetric orange-red Xignet mark. Keep native anchor navigation and locale-specific labels.
 
