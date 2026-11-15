@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2] - 2026-11-15
+
+- Promote the staging-verified login button to stable; runtime code is unchanged from 0.1.2-staging.0.
+
+## [0.1.2-staging.0] - 2026-11-15
+
+- Adopt Payload's native secondary login button and replace the legacy planet with the official symmetric orange-red Xignet mark. Keep native anchor navigation and locale-specific labels.
+
 ## 0.1.1
 
 - Declare the required TypeScript 5 peer used at runtime by Payload MCP schema conversion, so clean package consumers resolve the compiler without relying on the SDK development workspace.
