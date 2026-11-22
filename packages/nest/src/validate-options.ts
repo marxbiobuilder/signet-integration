@@ -108,9 +108,6 @@ export function validateSignetIntegrationOptions<E extends string>(
       `deployedProfiles must not contain ${DEVELOPMENT_ENVIRONMENT}; the resolver stamps it`,
     );
   }
-  const namespaces = new Set(profiles.map(([, p]) => p.namespace));
-  if (namespaces.size !== profiles.length)
-    fail('deployedProfiles namespaces must be unique');
   const hosts = new Set(profiles.map(([, p]) => p.host));
   if (hosts.size !== profiles.length)
     fail('deployedProfiles hosts must be unique');
@@ -133,11 +130,17 @@ export function validateSignetIntegrationOptions<E extends string>(
     options.developmentProfile.canonicalResource,
     'developmentProfile.canonicalResource',
   );
-  for (const [environment, { host }] of profiles) {
-    const path = resourcePath(
-      options.canonicalResourceFor(host),
-      `canonicalResourceFor(${host})`,
-    );
+  const deploymentPairs = new Set<string>();
+  for (const [environment, { host, namespace }] of profiles) {
+    const resource = options.canonicalResourceFor(host);
+    const path = resourcePath(resource, `canonicalResourceFor(${host})`);
+    const pair = JSON.stringify([namespace, resource]);
+    if (deploymentPairs.has(pair)) {
+      fail(
+        'deployedProfiles namespace and canonical resource pairs must be unique',
+      );
+    }
+    deploymentPairs.add(pair);
     if (path !== developmentPath) {
       fail(
         `canonicalResourceFor(${host}) has path ${path} but developmentProfile has ${developmentPath} (environment ${environment}); every profile must share one resource path`,

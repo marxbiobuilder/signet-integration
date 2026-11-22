@@ -126,6 +126,62 @@ describe('the mechanism under two consumers’ options', () => {
     });
   });
 
+  it('resolves either audience under a shared namespace', () => {
+    const options = {
+      ...OTHER,
+      deployedProfiles: {
+        live: { ...OTHER.deployedProfiles.live, namespace: 'shared' },
+        test: { ...OTHER.deployedProfiles.test, namespace: 'shared' },
+      },
+    };
+    for (const [environment, { host }] of Object.entries(
+      options.deployedProfiles,
+    )) {
+      const audience = options.canonicalResourceFor(host);
+      expect(
+        resolveDeploymentProfile(options, {
+          audience,
+          namespace: 'shared',
+          nodeEnv: 'production',
+        }),
+      ).toEqual({
+        ok: true,
+        profile: {
+          environment,
+          host,
+          namespace: 'shared',
+          canonicalResource: audience,
+        },
+      });
+    }
+    expect(
+      resolveDeploymentProfile(options, {
+        audience: 'https://unknown.example/v2/agent',
+        namespace: 'shared',
+        nodeEnv: 'production',
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('expected one of') as unknown,
+    });
+    const ambiguous = {
+      ...options,
+      canonicalResourceFor: () => 'https://shared.example/v2/agent',
+    };
+    expect(
+      resolveDeploymentProfile(ambiguous, {
+        audience: 'https://shared.example/v2/agent',
+        namespace: 'shared',
+        nodeEnv: 'production',
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining(
+        'match multiple deployed profiles',
+      ) as unknown,
+    });
+  });
+
   it('stamps the development environment on the caller’s development profile', () => {
     expect(
       resolveDeploymentProfile(OTHER, {

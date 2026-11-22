@@ -63,34 +63,44 @@ export function resolveDeploymentProfile<E extends string>(
       reason: `${namespaceEnv} and ${audienceEnv} must be configured together`,
     };
   }
-  const match = (
+  const candidates = (
     Object.entries(options.deployedProfiles) as [E, SignetDeployedProfile][]
-  ).find(([, profile]) => profile.namespace === namespace);
-  if (match === undefined) {
+  )
+    .filter(([, profile]) => profile.namespace === namespace)
+    .map(([environment, { host }]) => ({
+      environment,
+      host,
+      canonicalResource: options.canonicalResourceFor(host),
+    }));
+  if (candidates.length === 0) {
     return {
       ok: false,
       reason: `${namespaceEnv} names no known deployment (got a value not in the deployed profiles table)`,
     };
   }
-  const [environment, { host }] = match;
-  const expectedResource = options.canonicalResourceFor(host);
-  if (audience !== expectedResource) {
-    // The expected value is safe to print: it is a public identifier, and
-    // naming it is what lets an operator see which half of the pair was
-    // copied from the wrong overlay.
+  const matches = candidates.filter(
+    ({ canonicalResource }) => audience === canonicalResource,
+  );
+  if (matches.length === 0) {
+    const resources = candidates.map(
+      ({ canonicalResource }) => canonicalResource,
+    );
+    const expected =
+      resources.length === 1 ? resources[0] : `one of ${resources.join(', ')}`;
     return {
       ok: false,
-      reason: `${audienceEnv} does not match ${namespaceEnv}=${namespace} (expected ${expectedResource})`,
+      reason: `${audienceEnv} does not match ${namespaceEnv}=${namespace} (expected ${expected})`,
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      reason: `${namespaceEnv} and ${audienceEnv} match multiple deployed profiles`,
     };
   }
   return {
     ok: true,
-    profile: {
-      canonicalResource: expectedResource,
-      environment,
-      host,
-      namespace,
-    },
+    profile: { ...matches[0], namespace },
   };
 }
 

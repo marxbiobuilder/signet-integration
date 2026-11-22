@@ -1,6 +1,6 @@
 {
   "name": "@xignet/nest",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Xignet (Signet, OAuth 2.1 / OIDC) integration for NestJS: Bearer verification, RFC 6750 challenges, RFC 9728 metadata, deployment profile, and the authorization-code + PKCE login flow.",
   "license": "MIT",
   "repository": {

@@ -309,7 +309,7 @@ the parameter's declared type, so the predicate is the enforcement.
 
 `forRoot` validates the options at construction (admission scope present in
 `scopesSupported`, no quote-breaking characters in `realm`/`admissionScope`,
-unique namespaces and hosts, one resource path across every profile, no
+unique namespace/audience pairs and hosts, one resource path across every profile, no
 reserved `requestPrincipalKey`) and `createScopeVocabulary` validates its
 encoder (one-to-one, disjoint from the admission scope, defaults inside the
 vocabulary).

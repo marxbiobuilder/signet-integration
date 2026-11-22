@@ -11,6 +11,17 @@ describe('validateSignetIntegrationOptions', () => {
     );
   });
 
+  it('accepts a shared namespace with distinct audiences', () => {
+    const options = {
+      ...FIXTURE_OPTIONS,
+      deployedProfiles: {
+        production: { host: 'a.example', namespace: 'same' },
+        staging: { host: 'b.example', namespace: 'same' },
+      },
+    };
+    expect(validateSignetIntegrationOptions(options)).toBe(options);
+  });
+
   // Each row is a mistake a second consumer can make with no type error, and
   // the fragment of the message that names the field.
   it.each<[string, Partial<Options>, RegExp]>([
@@ -32,14 +43,15 @@ describe('validateSignetIntegrationOptions', () => {
       /requestPrincipalKey body/,
     ],
     [
-      'duplicate namespaces',
+      'duplicate namespace and canonical resource pairs',
       {
         deployedProfiles: {
           production: { host: 'a.example', namespace: 'same' },
           staging: { host: 'b.example', namespace: 'same' },
         },
+        canonicalResourceFor: () => 'https://shared.example/mcp',
       },
-      /namespaces must be unique/,
+      /namespace and canonical resource pairs must be unique/,
     ],
     [
       'duplicate hosts',
