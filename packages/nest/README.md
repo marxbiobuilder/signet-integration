@@ -309,10 +309,16 @@ the parameter's declared type, so the predicate is the enforcement.
 
 `forRoot` validates the options at construction (admission scope present in
 `scopesSupported`, no quote-breaking characters in `realm`/`admissionScope`,
-unique namespaces and hosts, one resource path across every profile, no
-reserved `requestPrincipalKey`) and `createScopeVocabulary` validates its
+unique namespace/audience pairs and hosts, one resource path across every
+profile, no reserved `requestPrincipalKey`) and `createScopeVocabulary` validates its
 encoder (one-to-one, disjoint from the admission scope, defaults inside the
 vocabulary).
+
+Namespaces are unique by default. List a namespace in
+`sharedDeploymentNamespaces` only when its profiles share the same trust level.
+In a shared namespace, the exact canonical audience selects the profile,
+including its login callback. A configured audience belonging to another
+profile in that namespace passes startup validation.
 
 Testing: `@xignet/nest/testing` exports `startTestIssuer()`
 (a local JWKS endpoint plus a signer that mints tokens in the shape Signet

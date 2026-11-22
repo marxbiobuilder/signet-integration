@@ -63,34 +63,55 @@ export function resolveDeploymentProfile<E extends string>(
       reason: `${namespaceEnv} and ${audienceEnv} must be configured together`,
     };
   }
-  const match = (
+  const candidates = (
     Object.entries(options.deployedProfiles) as [E, SignetDeployedProfile][]
-  ).find(([, profile]) => profile.namespace === namespace);
-  if (match === undefined) {
+  )
+    .filter(([, profile]) => profile.namespace === namespace)
+    .map(([environment, { host }]) => ({
+      environment,
+      host,
+      canonicalResource: options.canonicalResourceFor(host),
+    }));
+  if (candidates.length === 0) {
     return {
       ok: false,
       reason: `${namespaceEnv} names no known deployment (got a value not in the deployed profiles table)`,
     };
   }
-  const [environment, { host }] = match;
-  const expectedResource = options.canonicalResourceFor(host);
-  if (audience !== expectedResource) {
-    // The expected value is safe to print: it is a public identifier, and
-    // naming it is what lets an operator see which half of the pair was
-    // copied from the wrong overlay.
+  if (
+    candidates.length > 1 &&
+    !options.sharedDeploymentNamespaces?.includes(namespace)
+  ) {
     return {
       ok: false,
-      reason: `${audienceEnv} does not match ${namespaceEnv}=${namespace} (expected ${expectedResource})`,
+      reason: `${namespaceEnv}=${namespace} matches multiple profiles and is not explicitly shared`,
+    };
+  }
+  const matches = candidates.filter(
+    ({ canonicalResource }) => audience === canonicalResource,
+  );
+  if (matches.length === 0) {
+    // These resources are public identifiers. Label multiple candidates to
+    // make the expected configuration clear.
+    const expected =
+      candidates.length === 1
+        ? candidates[0].canonicalResource
+        : `one of ${candidates.map(({ environment, canonicalResource }) => `${environment}=${canonicalResource}`).join(', ')}`;
+    return {
+      ok: false,
+      reason: `${audienceEnv} does not match ${namespaceEnv}=${namespace} (expected ${expected})`,
+    };
+  }
+  // Options passed directly to the pure resolver may not have been validated.
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      reason: `${namespaceEnv} and ${audienceEnv} match multiple deployed profiles`,
     };
   }
   return {
     ok: true,
-    profile: {
-      canonicalResource: expectedResource,
-      environment,
-      host,
-      namespace,
-    },
+    profile: { ...matches[0], namespace },
   };
 }
 

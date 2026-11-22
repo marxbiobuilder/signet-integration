@@ -60,9 +60,13 @@ export interface SignetIntegrationOptions<E extends string = string> {
   // are both accepted; RFC 9728 §3.1's metadata URL and the challenge rule
   // follow from which one it is (bearer-challenge.ts).
   readonly canonicalResourceFor: (host: string) => string;
-  // The fixed allowlist: which namespace/host pairs the service may be
-  // deployed as. Deployment must supply the matching pair through `env`.
+  // The fixed allowlist. Deployment supplies the matching namespace and
+  // canonicalResourceFor(host) through `env`.
   readonly deployedProfiles: Readonly<Record<E, SignetDeployedProfile>>;
+  // Only opt in namespaces shared by profiles at the same trust level. Their
+  // audience selects the profile, so a valid audience from a peer deployment
+  // in a shared namespace passes the startup check.
+  readonly sharedDeploymentNamespaces?: readonly string[];
   readonly developmentProfile: SignetDevelopmentProfile;
   readonly env: SignetEnvNames;
   // The 403 body when the resolver refuses. It must not say WHICH of the

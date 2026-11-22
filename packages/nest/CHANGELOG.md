@@ -1,15 +1,23 @@
 # Changelog
 
-## Unreleased
-
-- Share JWT, scope vocabulary and pure OIDC primitives with `@xignet/core` while retaining existing entry points and state-cookie compatibility.
-
 All notable changes to this package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.4.1] - 2026-11-22
+
+### Changed
+
+- Resolve deployment profiles by exact namespace and canonical audience. Namespaces
+  stay unique by default. Opt in individual shared namespaces with
+  `sharedDeploymentNamespaces`. Duplicate namespace/audience pairs and duplicate
+  hosts are rejected.
+- Share JWT, scope vocabulary and pure OIDC primitives with `@xignet/core` 0.1.0.
+  The Nest package now depends on it and keeps the existing entry points and
+  state-cookie compatibility.
 
 ## [0.4.0] - 2026-11-09
 
@@ -190,7 +198,8 @@ principal 由 Passport 掛到 `request.user`；套件提供 helper 讓 401／403
   protected-resource metadata、deployment profile 配對檢查、scope vocabulary、
   `@marxbiotech/signet-integration/testing` 測試工具。
 
-[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/nest-v0.4.0...HEAD
+[Unreleased]: https://github.com/marxbiobuilder/signet-integration/compare/nest-v0.4.1...HEAD
+[0.4.1]: https://github.com/marxbiobuilder/signet-integration/compare/nest-v0.4.0...nest-v0.4.1
 [0.4.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.3.0...nest-v0.4.0
 [0.3.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marxbiobuilder/signet-integration/compare/v0.1.2...v0.2.0
