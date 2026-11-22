@@ -14,6 +14,7 @@ describe('validateSignetIntegrationOptions', () => {
   it('accepts a shared namespace with distinct audiences', () => {
     const options = {
       ...FIXTURE_OPTIONS,
+      sharedDeploymentNamespaces: ['same'],
       deployedProfiles: {
         production: { host: 'a.example', namespace: 'same' },
         staging: { host: 'b.example', namespace: 'same' },
@@ -43,6 +44,16 @@ describe('validateSignetIntegrationOptions', () => {
       /requestPrincipalKey body/,
     ],
     [
+      'a shared namespace without explicit opt-in',
+      {
+        deployedProfiles: {
+          production: { host: 'a.example', namespace: 'same' },
+          staging: { host: 'b.example', namespace: 'same' },
+        },
+      },
+      /namespaces must be unique unless explicitly shared/,
+    ],
+    [
       'duplicate namespace and canonical resource pairs',
       {
         deployedProfiles: {
@@ -50,6 +61,7 @@ describe('validateSignetIntegrationOptions', () => {
           staging: { host: 'b.example', namespace: 'same' },
         },
         canonicalResourceFor: () => 'https://shared.example/mcp',
+        sharedDeploymentNamespaces: ['same'],
       },
       /namespace and canonical resource pairs must be unique/,
     ],

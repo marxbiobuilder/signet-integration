@@ -129,6 +129,7 @@ describe('the mechanism under two consumers’ options', () => {
   it('resolves either audience under a shared namespace', () => {
     const options = {
       ...OTHER,
+      sharedDeploymentNamespaces: ['shared'],
       deployedProfiles: {
         live: { ...OTHER.deployedProfiles.live, namespace: 'shared' },
         test: { ...OTHER.deployedProfiles.test, namespace: 'shared' },
@@ -160,9 +161,24 @@ describe('the mechanism under two consumers’ options', () => {
         namespace: 'shared',
         nodeEnv: 'production',
       }),
-    ).toMatchObject({
+    ).toEqual({
       ok: false,
-      reason: expect.stringContaining('expected one of') as unknown,
+      reason:
+        'OTHER_AUD does not match OTHER_NS=shared (expected one of live=https://other.example/v2/agent, test=https://other.test.example/v2/agent)',
+    });
+    expect(
+      resolveDeploymentProfile(
+        { ...options, sharedDeploymentNamespaces: [] },
+        {
+          audience: 'https://other.example/v2/agent',
+          namespace: 'shared',
+          nodeEnv: 'production',
+        },
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        'OTHER_NS=shared matches multiple profiles and is not explicitly shared',
     });
     const ambiguous = {
       ...options,

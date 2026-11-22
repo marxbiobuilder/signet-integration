@@ -131,7 +131,17 @@ export function validateSignetIntegrationOptions<E extends string>(
     'developmentProfile.canonicalResource',
   );
   const deploymentPairs = new Set<string>();
+  const namespaces = new Set<string>();
   for (const [environment, { host, namespace }] of profiles) {
+    if (
+      namespaces.has(namespace) &&
+      !options.sharedDeploymentNamespaces?.includes(namespace)
+    ) {
+      fail(
+        'deployedProfiles namespaces must be unique unless explicitly shared',
+      );
+    }
+    namespaces.add(namespace);
     const resource = options.canonicalResourceFor(host);
     const path = resourcePath(resource, `canonicalResourceFor(${host})`);
     const pair = JSON.stringify([namespace, resource]);

@@ -78,20 +78,31 @@ export function resolveDeploymentProfile<E extends string>(
       reason: `${namespaceEnv} names no known deployment (got a value not in the deployed profiles table)`,
     };
   }
+  if (
+    candidates.length > 1 &&
+    !options.sharedDeploymentNamespaces?.includes(namespace)
+  ) {
+    return {
+      ok: false,
+      reason: `${namespaceEnv}=${namespace} matches multiple profiles and is not explicitly shared`,
+    };
+  }
   const matches = candidates.filter(
     ({ canonicalResource }) => audience === canonicalResource,
   );
   if (matches.length === 0) {
-    const resources = candidates.map(
-      ({ canonicalResource }) => canonicalResource,
-    );
+    // These resources are public identifiers. Label multiple candidates to
+    // make the expected configuration clear.
     const expected =
-      resources.length === 1 ? resources[0] : `one of ${resources.join(', ')}`;
+      candidates.length === 1
+        ? candidates[0].canonicalResource
+        : `one of ${candidates.map(({ environment, canonicalResource }) => `${environment}=${canonicalResource}`).join(', ')}`;
     return {
       ok: false,
       reason: `${audienceEnv} does not match ${namespaceEnv}=${namespace} (expected ${expected})`,
     };
   }
+  // Options passed directly to the pure resolver may not have been validated.
   if (matches.length > 1) {
     return {
       ok: false,
